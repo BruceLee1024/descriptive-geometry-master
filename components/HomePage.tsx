@@ -582,6 +582,51 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnter }) => {
           </div>
         </section>
 
+        {/* 作者信息 */}
+        <section className="py-16 px-6 bg-gradient-to-b from-transparent to-slate-800/30">
+          <div className="max-w-4xl mx-auto">
+            <div className="text-center mb-8">
+              <h3 className="text-2xl font-bold mb-2">关于作者</h3>
+              <p className="text-slate-400">工程设计 Engineer</p>
+            </div>
+            
+            <div className="flex flex-col md:flex-row items-center justify-center gap-8">
+              {/* 微信二维码 */}
+              <div className="bg-white p-4 rounded-2xl shadow-xl">
+                <img src="/wechat-qr.png" alt="微信二维码" className="w-40 h-40 object-contain" />
+                <p className="text-center text-slate-800 text-sm mt-2 font-medium">扫码添加微信</p>
+              </div>
+              
+              {/* 社交链接 */}
+              <div className="flex flex-col gap-4">
+                <a
+                  href="https://www.douyin.com/user/self?from_tab_name=main"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 px-6 py-3 bg-gradient-to-r from-pink-500/20 to-red-500/20 border border-pink-500/30 rounded-xl hover:border-pink-500/50 transition-all group"
+                >
+                  <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12.53.02C13.84 0 15.14.01 16.44 0c.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/>
+                  </svg>
+                  <span className="text-pink-300 group-hover:text-pink-200">关注抖音</span>
+                </a>
+                
+                <a
+                  href="https://www.xiaohongshu.com/user/profile/67b884d2000000000e013859"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 px-6 py-3 bg-gradient-to-r from-red-500/20 to-orange-500/20 border border-red-500/30 rounded-xl hover:border-red-500/50 transition-all group"
+                >
+                  <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-6h2v6zm4 0h-2v-6h2v6zm-2-8c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z"/>
+                  </svg>
+                  <span className="text-red-300 group-hover:text-red-200">关注小红书</span>
+                </a>
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* Footer */}
         <footer className="py-8 px-6 border-t border-slate-800">
           <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
@@ -590,7 +635,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnter }) => {
               <span className="text-slate-400">画法几何大师</span>
             </div>
             <p className="text-slate-500 text-sm">
-              交互式工程制图学习平台 · 让画法几何不再难懂
+              Made with ❤️ by 工程设计 Engineer · 交互式工程制图学习平台
             </p>
           </div>
         </footer>

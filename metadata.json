@@ -1,0 +1,5 @@
+{
+  "name": "Descriptive Geometry Master",
+  "description": "An interactive 3D learning platform for Descriptive Geometry and Engineering Drawing using Three.js and Gemini AI.",
+  "requestFramePermissions": []
+}

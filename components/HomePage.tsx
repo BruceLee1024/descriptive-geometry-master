@@ -593,7 +593,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnter }) => {
             <div className="flex flex-col md:flex-row items-center justify-center gap-8">
               {/* 微信二维码 */}
               <div className="bg-white p-4 rounded-2xl shadow-xl">
-                <img src="/wechat-qr.png" alt="微信二维码" className="w-40 h-40 object-contain" />
+                <img src={import.meta.env.BASE_URL + 'wechat-qr.png'} alt="微信二维码" className="w-40 h-40 object-contain" />
                 <p className="text-center text-slate-800 text-sm mt-2 font-medium">扫码添加微信</p>
               </div>
               

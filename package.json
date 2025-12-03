@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "homepage": "https://yourusername.github.io/descriptive-geometry-master",
+  "homepage": "https://BruceLee1024.github.io/descriptive-geometry-master",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

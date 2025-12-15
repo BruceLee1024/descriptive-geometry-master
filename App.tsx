@@ -10,7 +10,15 @@ import {
 import { GlassBoxScene } from './components/GlassBoxScene';
 import { HomePage } from './components/HomePage';
 import { GeometryType, GEOMETRIES, GeometryParams } from './types';
-import { explainGeometryStream, getApiKey, setApiKey, clearApiKey } from './services/deepseekService';
+import { 
+  explainGeometryStream, 
+  getApiKey, 
+  setApiKey, 
+  clearApiKey,
+  chatWithTutorStream,
+  generateWelcomeMessage,
+  ChatMessage
+} from './services/deepseekService';
 
 const App: React.FC = () => {
   const [showHomePage, setShowHomePage] = useState(true);
@@ -31,6 +39,11 @@ const App: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true); // 右侧栏状态
   
+  // 对话式AI助教状态
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [userInput, setUserInput] = useState("");
+  const [currentAssistantMessage, setCurrentAssistantMessage] = useState("");
+  
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [hasApiKey, setHasApiKey] = useState(!!getApiKey());
@@ -42,6 +55,11 @@ const App: React.FC = () => {
   const [drawCompleted, setDrawCompleted] = useState(false);
   const [drawnPoints, setDrawnPoints] = useState<[number, number][]>([]);
   const [drawnDepth, setDrawnDepth] = useState(2);
+  
+  // 截平面相关状态
+  const [showSectionPlane, setShowSectionPlane] = useState(false);
+  const [sectionPlanePosition, setSectionPlanePosition] = useState<[number, number, number]>([0, 0.5, 0]);
+  const [sectionPlaneRotation, setSectionPlaneRotation] = useState<[number, number, number]>([Math.PI / 2, 0, 0]);
 
   const aiContentRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -73,21 +91,67 @@ const App: React.FC = () => {
 
   // 平滑滚动到底部
   useEffect(() => {
-    if (aiContentRef.current && isLoadingAi && shouldAutoScrollRef.current) {
+    if (aiContentRef.current && shouldAutoScrollRef.current) {
       const el = aiContentRef.current;
       requestAnimationFrame(() => {
         el.scrollTop = el.scrollHeight;
       });
     }
-  }, [aiExplanation, isLoadingAi]);
+  }, [chatMessages, currentAssistantMessage, isLoadingAi]);
 
-  // 切换形体时只显示描述，不自动生成 AI 解释
+  // 切换形体时生成欢迎消息
   useEffect(() => {
     const geoInfo = GEOMETRIES.find(g => g.id === currentGeometry);
     if (geoInfo) {
-      setAiExplanation(geoInfo.description);
+      // 清空对话历史，生成新的欢迎消息
+      const welcomeMsg = generateWelcomeMessage(geoInfo.name);
+      setChatMessages([{ role: 'assistant', content: welcomeMsg }]);
+      setCurrentAssistantMessage("");
+      setAiExplanation("");
     }
   }, [currentGeometry]);
+
+  // 发送用户消息
+  const handleSendMessage = useCallback(() => {
+    if (!userInput.trim() || isLoadingAi) return;
+    
+    const geoInfo = GEOMETRIES.find(g => g.id === currentGeometry);
+    const userMessage: ChatMessage = { role: 'user', content: userInput.trim() };
+    const newMessages = [...chatMessages, userMessage];
+    setChatMessages(newMessages);
+    setUserInput("");
+    setIsLoadingAi(true);
+    setCurrentAssistantMessage("");
+    shouldAutoScrollRef.current = true;
+    
+    let fullResponse = "";
+    chatWithTutorStream(
+      newMessages,
+      geoInfo?.name || "这个物体",
+      (chunk) => {
+        fullResponse += chunk;
+        setCurrentAssistantMessage(fullResponse);
+      },
+      () => {
+        setChatMessages(prev => [...prev, { role: 'assistant', content: fullResponse }]);
+        setCurrentAssistantMessage("");
+        setIsLoadingAi(false);
+      },
+      (error) => {
+        setChatMessages(prev => [...prev, { role: 'assistant', content: error }]);
+        setCurrentAssistantMessage("");
+        setIsLoadingAi(false);
+      }
+    );
+  }, [userInput, isLoadingAi, chatMessages, currentGeometry]);
+
+  // 处理回车发送
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
 
   const handleAskAI = () => {
     const geoInfo = GEOMETRIES.find(g => g.id === currentGeometry);
@@ -286,6 +350,55 @@ const App: React.FC = () => {
                 <button onClick={() => setShowObject(!showObject)} className={`flex items-center justify-center gap-1.5 p-2.5 rounded-lg text-[11px] transition-all border ${showObject ? 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10' : 'bg-white/5 text-slate-500 border-white/10'}`}>{showObject ? <Eye size={12} /> : <EyeOff size={12} />}{showObject ? '实体' : '隐藏'}</button>
               </div>
               <button onClick={() => setShowProjectors(!showProjectors)} className={`w-full flex items-center justify-center gap-1.5 p-2.5 rounded-lg text-[11px] transition-all border ${showProjectors ? 'bg-gradient-to-r from-rose-600/20 to-pink-600/20 text-rose-300 border-rose-500/30' : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'}`}><PenTool size={12} />{showProjectors ? '投影线 ON' : '投影线 OFF'}</button>
+              
+              {/* 截平面控制 */}
+              <button onClick={() => setShowSectionPlane(!showSectionPlane)} className={`w-full flex items-center justify-between p-2.5 rounded-lg transition-all border ${showSectionPlane ? 'bg-gradient-to-r from-red-600/20 to-orange-600/20 border-red-500/30 text-red-300' : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10 hover:border-red-500/30'}`}>
+                <span className="flex items-center gap-1.5 text-[11px]">✂️ 截平面</span>
+                <div className={`w-2 h-2 rounded-full transition-all ${showSectionPlane ? 'bg-red-400 shadow-lg shadow-red-400/50' : 'bg-slate-500'}`} />
+              </button>
+              {showSectionPlane && (
+                <div className="space-y-2 p-2.5 bg-red-500/10 rounded-lg border border-red-500/20">
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] text-red-400 w-12">高度 Y</label>
+                    <input 
+                      type="range" 
+                      min={-1.5} 
+                      max={1.5} 
+                      step={0.1} 
+                      value={sectionPlanePosition[1]} 
+                      onChange={(e) => setSectionPlanePosition([sectionPlanePosition[0], parseFloat(e.target.value), sectionPlanePosition[2]])} 
+                      className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-red-500" 
+                    />
+                    <span className="text-[10px] text-red-300 w-8 text-right font-mono">{sectionPlanePosition[1].toFixed(1)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] text-orange-400 w-12">旋转 X</label>
+                    <input 
+                      type="range" 
+                      min={0} 
+                      max={Math.PI} 
+                      step={0.1} 
+                      value={sectionPlaneRotation[0]} 
+                      onChange={(e) => setSectionPlaneRotation([parseFloat(e.target.value), sectionPlaneRotation[1], sectionPlaneRotation[2]])} 
+                      className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-orange-500" 
+                    />
+                    <span className="text-[10px] text-orange-300 w-8 text-right font-mono">{(sectionPlaneRotation[0] * 180 / Math.PI).toFixed(0)}°</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] text-yellow-400 w-12">旋转 Y</label>
+                    <input 
+                      type="range" 
+                      min={-Math.PI / 2} 
+                      max={Math.PI / 2} 
+                      step={0.1} 
+                      value={sectionPlaneRotation[1]} 
+                      onChange={(e) => setSectionPlaneRotation([sectionPlaneRotation[0], parseFloat(e.target.value), sectionPlaneRotation[2]])} 
+                      className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-yellow-500" 
+                    />
+                    <span className="text-[10px] text-yellow-300 w-8 text-right font-mono">{(sectionPlaneRotation[1] * 180 / Math.PI).toFixed(0)}°</span>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         </div>
@@ -338,7 +451,23 @@ const App: React.FC = () => {
         </div>
 
         <Canvas shadows dpr={[1, 2]}>
-          <GlassBoxScene geometryType={currentGeometry} geometryParams={geoParams} isUnfolded={isUnfolded} showObject={showObject} showProjectors={showProjectors} useOrthographic={useOrthographic} showAxonometric={showAxonometric} axonometricType={axonometricType} drawCompleted={drawCompleted} drawnPoints={drawnPoints} drawnDepth={drawnDepth} onDrawComplete={handleDrawComplete} />
+          <GlassBoxScene 
+            geometryType={currentGeometry} 
+            geometryParams={geoParams} 
+            isUnfolded={isUnfolded} 
+            showObject={showObject} 
+            showProjectors={showProjectors} 
+            useOrthographic={useOrthographic} 
+            showAxonometric={showAxonometric} 
+            axonometricType={axonometricType} 
+            drawCompleted={drawCompleted} 
+            drawnPoints={drawnPoints} 
+            drawnDepth={drawnDepth} 
+            onDrawComplete={handleDrawComplete}
+            showSectionPlane={showSectionPlane}
+            sectionPlanePosition={sectionPlanePosition}
+            sectionPlaneRotation={sectionPlaneRotation}
+          />
         </Canvas>
       </div>
 
@@ -386,31 +515,75 @@ const App: React.FC = () => {
             </div>
           )}
           
-          <div ref={aiContentRef} onScroll={() => { shouldAutoScrollRef.current = checkShouldAutoScroll(); }} className="flex-1 bg-gradient-to-br from-slate-900/80 to-slate-800/80 rounded-xl p-4 border border-indigo-500/20 overflow-y-auto scrollbar-thin scrollbar-thumb-indigo-500/30 scrollbar-track-transparent relative">
+          {/* 对话消息区域 */}
+          <div ref={aiContentRef} onScroll={() => { shouldAutoScrollRef.current = checkShouldAutoScroll(); }} className="flex-1 bg-gradient-to-br from-slate-900/80 to-slate-800/80 rounded-xl p-3 border border-indigo-500/20 overflow-y-auto scrollbar-thin scrollbar-thumb-indigo-500/30 scrollbar-track-transparent relative">
             <div className="absolute inset-0 bg-[linear-gradient(rgba(99,102,241,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(99,102,241,0.02)_1px,transparent_1px)] bg-[size:15px_15px] pointer-events-none rounded-xl" />
-            <div className="relative z-10">
-              {aiExplanation ? (
-                <div className="prose prose-sm prose-invert max-w-none prose-p:text-slate-300 prose-p:leading-relaxed prose-p:my-2 prose-p:text-[13px] prose-strong:text-indigo-300 prose-ul:text-slate-300 prose-ol:text-slate-300 prose-li:my-0.5 prose-li:text-[13px] prose-headings:text-white prose-headings:font-semibold prose-headings:text-sm">
-                  <ReactMarkdown>{aiExplanation}</ReactMarkdown>
-                </div>
-              ) : (
+            <div className="relative z-10 space-y-3">
+              {chatMessages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-3 py-8">
                   <div className="w-12 h-12 rounded-xl bg-indigo-500/10 flex items-center justify-center">
                     <MessageSquare size={24} className="text-indigo-400/50" />
                   </div>
                   <p className="text-xs text-slate-400">选择形体开始学习</p>
                 </div>
+              ) : (
+                <>
+                  {chatMessages.map((msg, idx) => (
+                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[85%] rounded-xl px-3 py-2 ${
+                        msg.role === 'user' 
+                          ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white' 
+                          : 'bg-slate-700/50 border border-slate-600/30'
+                      }`}>
+                        <div className="prose prose-sm prose-invert max-w-none prose-p:text-[12px] prose-p:leading-relaxed prose-p:my-1 prose-strong:text-indigo-300 prose-ul:text-[12px] prose-ol:text-[12px] prose-li:my-0.5">
+                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {/* 正在生成的消息 */}
+                  {currentAssistantMessage && (
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%] rounded-xl px-3 py-2 bg-slate-700/50 border border-slate-600/30">
+                        <div className="prose prose-sm prose-invert max-w-none prose-p:text-[12px] prose-p:leading-relaxed prose-p:my-1 prose-strong:text-indigo-300">
+                          <ReactMarkdown>{currentAssistantMessage}</ReactMarkdown>
+                          <span className="inline-block w-1.5 h-4 bg-gradient-to-t from-indigo-400 to-purple-400 animate-pulse ml-0.5 align-middle rounded-sm"></span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
-              {isLoadingAi && <span className="inline-block w-2 h-5 bg-gradient-to-t from-indigo-400 to-purple-400 animate-pulse ml-0.5 align-middle rounded-sm"></span>}
             </div>
           </div>
 
-          <div className="mt-3 flex gap-2">
-            {isLoadingAi ? (
-              <button onClick={handleStopAi} className="flex-1 py-3 text-[11px] bg-gradient-to-r from-red-600/30 to-pink-600/30 hover:from-red-600/40 hover:to-pink-600/40 text-red-300 rounded-xl transition-all flex items-center justify-center gap-1.5 border border-red-500/30"><StopCircle size={14} />停止生成</button>
-            ) : (
-              <button onClick={handleAskAI} disabled={!hasApiKey} className="flex-1 py-3 text-[11px] bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 hover:scale-[1.02] active:scale-[0.98]"><BookOpen size={14} />详细解释投影关系</button>
-            )}
+          {/* 输入区域 */}
+          <div className="mt-3 space-y-2">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={userInput}
+                onChange={(e) => setUserInput(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder="输入你的问题或回答..."
+                disabled={!hasApiKey || isLoadingAi}
+                className="flex-1 px-3 py-2.5 bg-slate-800/80 border border-indigo-500/30 rounded-xl text-[12px] text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 transition-all disabled:opacity-50"
+              />
+              {isLoadingAi ? (
+                <button onClick={handleStopAi} className="px-3 py-2.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-xl transition-all border border-red-500/30">
+                  <StopCircle size={16} />
+                </button>
+              ) : (
+                <button 
+                  onClick={handleSendMessage} 
+                  disabled={!hasApiKey || !userInput.trim()} 
+                  className="px-3 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/20"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              )}
+            </div>
+            <p className="text-[9px] text-slate-500 text-center">按 Enter 发送 · AI 老师会引导你学习画法几何</p>
           </div>
         </div>
       </div>

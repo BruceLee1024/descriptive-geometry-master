@@ -85,8 +85,12 @@ export const useGeometryFactory = (type: GeometryType, params: GeometryParams) =
         return geo;
       }
 
-      case GeometryType.TORUS:
-        return new THREE.TorusGeometry(width / 2.5, width / 6, 16, 48);
+      case GeometryType.TORUS: {
+        const torusGeo = new THREE.TorusGeometry(width / 2.5, width / 6, 16, 48);
+        // 将圆环从XY平面旋转到XZ平面（水平放置）
+        torusGeo.rotateX(Math.PI / 2);
+        return torusGeo;
+      }
 
       case GeometryType.WEDGE: {
         const shape = new THREE.Shape();
@@ -383,43 +387,42 @@ const HollowCylinderProjection: React.FC<{ params: GeometryParams; plane: 'V' | 
       </group>
     );
   } else if (plane === 'W' || plane === 'R') {
-    // 左视图/右视图：显示矩形外轮廓 + 内孔虚线 (在YZ平面，X=0)
-    const posX = plane === 'W' ? -OFFSET : OFFSET;
-    
-    // 创建虚线的辅助函数
-    const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
-      const geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(...start),
-        new THREE.Vector3(...end)
-      ]);
-      geometry.computeBoundingSphere();
-      const line = new THREE.Line(
-        geometry,
-        new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08, linewidth: 2 })
-      );
-      line.computeLineDistances();
-      return line;
-    };
-    
+    // 左视图/右视图：显示矩形外轮廓 + 内孔虚线
+    // 注意：父级已经有旋转变换，这里在 XY 平面绘制（与 V 面类似）
     return (
-      <group position={[posX, 0, 0]}>
+      <group position={[0, 0, OFFSET]}>
         {/* 外轮廓实线 - 矩形 */}
         <Line
           points={[
-            [0, -halfH, -outerR], [0, -halfH, outerR], [0, halfH, outerR], [0, halfH, -outerR], [0, -halfH, -outerR]
+            [-outerR, -halfH, 0], [outerR, -halfH, 0], [outerR, halfH, 0], [-outerR, halfH, 0], [-outerR, -halfH, 0]
           ]}
           color="#1f2937"
           lineWidth={2}
         />
-        {/* 内孔虚线 - 使用原生 Three.js */}
-        <primitive object={createDashedLine([0, -halfH, -innerR], [0, halfH, -innerR])} />
-        <primitive object={createDashedLine([0, -halfH, innerR], [0, halfH, innerR])} />
+        {/* 内孔虚线 - 两条竖线 */}
+        <Line
+          points={[[-innerR, -halfH, 0], [-innerR, halfH, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+        <Line
+          points={[[innerR, -halfH, 0], [innerR, halfH, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
       </group>
     );
   } else {
     // 俯视图：显示两个同心圆
+    // 注意：父级已有旋转变换，在 XY 平面绘制
     return (
-      <group position={[0, OFFSET, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <group position={[0, 0, OFFSET]}>
         {/* 外圆实线 */}
         <Line points={createCirclePoints(outerR)} color="#1f2937" lineWidth={2} />
         {/* 内圆实线（内孔在俯视图中可见） */}
@@ -474,41 +477,64 @@ const SlotBlockProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' |
     );
   } else if (plane === 'H') {
     // 俯视图：显示矩形 + 槽的虚线
+    // 注意：父级已有旋转变换，在 XY 平面绘制
     return (
-      <group position={[0, OFFSET, 0]}>
+      <group position={[0, 0, OFFSET]}>
         {/* 外轮廓实线 */}
         <Line
-          points={[[-w, 0, -d], [w, 0, -d], [w, 0, d], [-w, 0, d], [-w, 0, -d]]}
+          points={[[-w, -d, 0], [w, -d, 0], [w, d, 0], [-w, d, 0], [-w, -d, 0]]}
           color="#1f2937"
           lineWidth={2}
         />
         {/* 槽的虚线 */}
-        <primitive object={createDashedLine([-slotW/2, 0, -d], [-slotW/2, 0, d])} />
-        <primitive object={createDashedLine([slotW/2, 0, -d], [slotW/2, 0, d])} />
+        <Line
+          points={[[-slotW/2, -d, 0], [-slotW/2, d, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+        <Line
+          points={[[slotW/2, -d, 0], [slotW/2, d, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
       </group>
     );
   } else {
     // 左视图/右视图：显示矩形 + 槽的虚线
-    const posX = plane === 'W' ? -OFFSET : OFFSET;
+    // 注意：父级已有旋转变换，在 XY 平面绘制
     return (
-      <group position={[posX, 0, 0]}>
+      <group position={[0, 0, OFFSET]}>
         {/* 外轮廓实线 */}
         <Line
-          points={[[0, -h, -d], [0, -h, d], [0, h, d], [0, h, -d], [0, -h, -d]]}
+          points={[[-d, -h, 0], [d, -h, 0], [d, h, 0], [-d, h, 0], [-d, -h, 0]]}
           color="#1f2937"
           lineWidth={2}
         />
         {/* 槽底虚线 */}
-        <primitive object={createDashedLine([0, h - slotD, -d], [0, h - slotD, d])} />
+        <Line
+          points={[[-d, h - slotD, 0], [d, h - slotD, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
       </group>
     );
   }
 };
 
 // 圆环体专用投影视图
+// 圆环水平放置在XZ平面（通过rotateX(PI/2)旋转后）
 const TorusProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
   const { width } = params;
-  const R = width / 2.5;  // 主半径
+  const R = width / 2.5;  // 主半径（圆环中心到管中心的距离）
   const r = width / 6;    // 管半径
   const OFFSET = 0.05;
 
@@ -523,7 +549,27 @@ const TorusProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W'
   };
 
   if (plane === 'V') {
-    // 主视图：看到圆环的正面，显示外圆和内圆
+    // 主视图：从前面看（沿-Z方向）
+    // 圆环水平放置在XZ平面，从正面看到两个管截面圆（左右排列）
+    // 加上连接两个圆的上下切线
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 左边的管截面圆 */}
+        <group position={[-R, 0, 0]}>
+          <Line points={createCirclePoints(r)} color="#1f2937" lineWidth={2} />
+        </group>
+        {/* 右边的管截面圆 */}
+        <group position={[R, 0, 0]}>
+          <Line points={createCirclePoints(r)} color="#1f2937" lineWidth={2} />
+        </group>
+        {/* 连接两个圆的切线（上下两条横线） */}
+        <Line points={[[-R, r, 0], [R, r, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[-R, -r, 0], [R, -r, 0]]} color="#1f2937" lineWidth={2} />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：从上面看（沿-Y方向）
+    // 圆环水平放置在XZ平面，从上面看到两个同心圆
     const outerR = R + r;
     const innerR = R - r;
     return (
@@ -534,43 +580,69 @@ const TorusProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W'
         <Line points={createCirclePoints(innerR)} color="#1f2937" lineWidth={2} />
       </group>
     );
-  } else if (plane === 'H') {
-    // 俯视图：看到圆环的顶面，显示外圆和内圆
-    const outerR = R + r;
-    const innerR = R - r;
+  } else {
+    // 左视图/右视图：从侧面看（沿X方向）
+    // 圆环水平放置在XZ平面，从侧面看到两个管截面圆（前后排列，投影后左右排列）
+    // 加上连接两个圆的上下切线
     return (
-      <group position={[0, OFFSET, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        {/* 外圆轮廓 */}
-        <Line points={createCirclePoints(outerR)} color="#1f2937" lineWidth={2} />
-        {/* 内圆轮廓 */}
-        <Line points={createCirclePoints(innerR)} color="#1f2937" lineWidth={2} />
+      <group position={[0, 0, OFFSET]}>
+        {/* 前面的管截面圆（投影后在左边） */}
+        <group position={[-R, 0, 0]}>
+          <Line points={createCirclePoints(r)} color="#1f2937" lineWidth={2} />
+        </group>
+        {/* 后面的管截面圆（投影后在右边） */}
+        <group position={[R, 0, 0]}>
+          <Line points={createCirclePoints(r)} color="#1f2937" lineWidth={2} />
+        </group>
+        {/* 连接两个圆的切线（上下两条横线） */}
+        <Line points={[[-R, r, 0], [R, r, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[-R, -r, 0], [R, -r, 0]]} color="#1f2937" lineWidth={2} />
+      </group>
+    );
+  }
+};
+
+// 立方体专用投影视图
+const CubeProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, depth } = params;
+  const w = width / 2;
+  const h = height / 2;
+  const d = depth / 2;
+  const OFFSET = 0.05;
+
+  if (plane === 'V') {
+    // 主视图：看到矩形 (width × height)
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-w, -h, 0], [w, -h, 0], [w, h, 0], [-w, h, 0], [-w, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：看到矩形 (width × depth)
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-w, -d, 0], [w, -d, 0], [w, d, 0], [-w, d, 0], [-w, -d, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
       </group>
     );
   } else {
-    // 左视图/右视图：看到圆环的侧面，显示一个圆（管截面）
-    const posX = plane === 'W' ? -OFFSET : OFFSET;
-    // 侧视图显示的是管的截面圆，位于主半径R处
+    // 左视图/右视图：看到矩形 (depth × height)
+    // 注意：父级已有旋转变换，在 XY 平面绘制
     return (
-      <group position={[posX, 0, 0]}>
-        {/* 上方的管截面圆 */}
-        <group position={[0, 0, R]}>
-          <Line 
-            points={createCirclePoints(r).map(p => new THREE.Vector3(0, p.y, p.x))} 
-            color="#1f2937" 
-            lineWidth={2} 
-          />
-        </group>
-        {/* 下方的管截面圆 */}
-        <group position={[0, 0, -R]}>
-          <Line 
-            points={createCirclePoints(r).map(p => new THREE.Vector3(0, p.y, p.x))} 
-            color="#1f2937" 
-            lineWidth={2} 
-          />
-        </group>
-        {/* 连接上下两个圆的切线 */}
-        <Line points={[[0, r, -R], [0, r, R]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[0, -r, -R], [0, -r, R]]} color="#1f2937" lineWidth={2} />
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-d, -h, 0], [d, -h, 0], [d, h, 0], [-d, h, 0], [-d, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
       </group>
     );
   }
@@ -599,16 +671,822 @@ const SphereProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W
       </group>
     );
   } else if (plane === 'H') {
+    // 俯视图：看到圆形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
     return (
-      <group position={[0, OFFSET, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <group position={[0, 0, OFFSET]}>
         <Line points={createCirclePoints(r)} color="#1f2937" lineWidth={2} />
       </group>
     );
   } else {
-    const posX = plane === 'W' ? -OFFSET : OFFSET;
+    // 左视图/右视图：看到圆形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
     return (
-      <group position={[posX, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
+      <group position={[0, 0, OFFSET]}>
         <Line points={createCirclePoints(r)} color="#1f2937" lineWidth={2} />
+      </group>
+    );
+  }
+};
+
+// 切角块专用投影视图
+const CutBlockProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, depth, cutSize } = params;
+  const w = width / 2;
+  const h = height / 2;
+  const d = depth / 2;
+  const safeCut = Math.min(cutSize, Math.min(width, height) - 0.05);
+  const OFFSET = 0.05;
+
+  // 创建虚线
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...start),
+      new THREE.Vector3(...end)
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 })
+    );
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图（从前往后看）：看到切角形状
+    // 可见：外轮廓（切角形状）
+    // 不可见：无（后面的边与前面重合）
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 外轮廓实线 - 切角形状 */}
+        <Line
+          points={[
+            [-w, -h, 0], [w, -h, 0], [w, h - safeCut, 0], 
+            [w - safeCut, h, 0], [-w, h, 0], [-w, -h, 0]
+          ]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图（从上往下看）：看到切角形状
+    // 切角在右后上角（+X, -Z），从上往下看，切角在右上角（+X, +Y方向，因为-Z映射到+Y）
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 外轮廓实线 - 切角形状 */}
+        <Line
+          points={[
+            [-w, -d, 0], [w, -d, 0], [w, d - safeCut, 0], 
+            [w - safeCut, d, 0], [-w, d, 0], [-w, -d, 0]
+          ]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else {
+    // 左视图（W面）和右视图（R面）：从侧面看，看到矩形
+    // 切角沿Z轴方向，从侧面看不到切角的形状变化
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 外轮廓实线 - 矩形 */}
+        <Line
+          points={[[-d, -h, 0], [d, -h, 0], [d, h, 0], [-d, h, 0], [-d, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  }
+};
+
+// L形块专用投影视图
+const LShapeProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, depth } = params;
+  const w = width / 2;
+  const h = height / 2;
+  const d = depth / 2;
+  const thick = Math.min(width, height) * 0.4;
+  const OFFSET = 0.05;
+
+  // 创建虚线
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...start),
+      new THREE.Vector3(...end)
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 })
+    );
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：看到L形轮廓
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[
+            [-w, -h, 0], [w, -h, 0], [w, -h + thick, 0],
+            [-w + thick, -h + thick, 0], [-w + thick, h, 0],
+            [-w, h, 0], [-w, -h, 0]
+          ]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：看到矩形，内部L形边缘用虚线
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 外轮廓 */}
+        <Line
+          points={[[-w, -d, 0], [w, -d, 0], [w, d, 0], [-w, d, 0], [-w, -d, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* L形内角边 - 虚线（不可见） */}
+        <Line
+          points={[[-w + thick, -d, 0], [-w + thick, d, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+      </group>
+    );
+  } else {
+    // 左视图/右视图：看到矩形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-d, -h, 0], [d, -h, 0], [d, h, 0], [-d, h, 0], [-d, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* L形内角边 - 虚线 */}
+        <Line
+          points={[[-d, -h + thick, 0], [d, -h + thick, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+      </group>
+    );
+  }
+};
+
+// 楔形块专用投影视图
+const WedgeProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, depth } = params;
+  const w = width / 2;
+  const h = height / 2;
+  const d = depth / 2;
+  const OFFSET = 0.05;
+
+  // 创建虚线
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...start),
+      new THREE.Vector3(...end)
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 })
+    );
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：看到三角形
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-w, -h, 0], [w, -h, 0], [w, h, 0], [-w, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：看到矩形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 外轮廓 */}
+        <Line
+          points={[[-w, -d, 0], [w, -d, 0], [w, d, 0], [-w, d, 0], [-w, -d, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else {
+    // 左视图/右视图：看到矩形（楔形体沿Z轴挤出，侧面是矩形）
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-d, -h, 0], [d, -h, 0], [d, h, 0], [-d, h, 0], [-d, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  }
+};
+
+// T形块专用投影视图
+const TShapeProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, depth } = params;
+  const w = width / 2;
+  const h = height / 2;
+  const d = depth / 2;
+  const stemW = width * 0.3;
+  const topH = height * 0.3;
+  const OFFSET = 0.05;
+
+  // 创建虚线
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...start),
+      new THREE.Vector3(...end)
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 })
+    );
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：看到T形轮廓
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[
+            [-stemW/2, -h, 0], [stemW/2, -h, 0], [stemW/2, h - topH, 0],
+            [w, h - topH, 0], [w, h, 0], [-w, h, 0],
+            [-w, h - topH, 0], [-stemW/2, h - topH, 0], [-stemW/2, -h, 0]
+          ]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：看到矩形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 外轮廓 */}
+        <Line
+          points={[[-w, -d, 0], [w, -d, 0], [w, d, 0], [-w, d, 0], [-w, -d, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else {
+    // 左视图/右视图：看到矩形（茎部侧面）
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 茎部 */}
+        <Line
+          points={[[-d, -h, 0], [d, -h, 0], [d, h - topH, 0], [-d, h - topH, 0], [-d, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 顶部横条 */}
+        <Line
+          points={[[-d, h - topH, 0], [-d, h, 0], [d, h, 0], [d, h - topH, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  }
+};
+
+// 十字形块专用投影视图
+const CrossShapeProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, depth } = params;
+  const w = width / 2;
+  const h = height / 2;
+  const d = depth / 2;
+  const armW = width * 0.3;
+  const armH = height * 0.3;
+  const OFFSET = 0.05;
+
+  // 创建虚线
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...start),
+      new THREE.Vector3(...end)
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 })
+    );
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：看到十字形轮廓
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[
+            [-armW/2, -h, 0], [armW/2, -h, 0], [armW/2, -armH/2, 0],
+            [w, -armH/2, 0], [w, armH/2, 0], [armW/2, armH/2, 0],
+            [armW/2, h, 0], [-armW/2, h, 0], [-armW/2, armH/2, 0],
+            [-w, armH/2, 0], [-w, -armH/2, 0], [-armW/2, -armH/2, 0],
+            [-armW/2, -h, 0]
+          ]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：看到矩形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 外轮廓 */}
+        <Line
+          points={[[-w, -d, 0], [w, -d, 0], [w, d, 0], [-w, d, 0], [-w, -d, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else {
+    // 左视图/右视图
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 外轮廓 */}
+        <Line
+          points={[[-d, -h, 0], [d, -h, 0], [d, h, 0], [-d, h, 0], [-d, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 十字形内角边 - 虚线 */}
+        <Line
+          points={[[-d, -armH/2, 0], [d, -armH/2, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+        <Line
+          points={[[-d, armH/2, 0], [d, armH/2, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+      </group>
+    );
+  }
+};
+
+// 阶梯块专用投影视图
+const SteppedBlockProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, depth } = params;
+  const w = width / 2;
+  const h = height / 2;
+  const d = depth / 2;
+  const step = height / 3;
+  const OFFSET = 0.05;
+
+  // 创建虚线
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...start),
+      new THREE.Vector3(...end)
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 })
+    );
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：看到阶梯形轮廓
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[
+            [-w, -h, 0], [w, -h, 0], [w, -h + step, 0],
+            [w * 0.5, -h + step, 0], [w * 0.5, -h + step * 2, 0],
+            [0, -h + step * 2, 0], [0, h, 0],
+            [-w, h, 0], [-w, -h, 0]
+          ]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：看到矩形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 外轮廓 */}
+        <Line
+          points={[[-w, -d, 0], [w, -d, 0], [w, d, 0], [-w, d, 0], [-w, -d, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else {
+    // 左视图/右视图：看到矩形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-d, -h, 0], [d, -h, 0], [d, h, 0], [-d, h, 0], [-d, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 阶梯内部边 - 虚线 */}
+        <Line
+          points={[[-d, -h + step, 0], [d, -h + step, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+        <Line
+          points={[[-d, -h + step * 2, 0], [d, -h + step * 2, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+      </group>
+    );
+  }
+};
+
+// 圆柱体专用投影视图
+const CylinderProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height } = params;
+  const r = width / 2;
+  const h = height / 2;
+  const OFFSET = 0.05;
+
+  // 创建圆形路径点
+  const createCirclePoints = (radius: number, segments: number = 64): THREE.Vector3[] => {
+    const points: THREE.Vector3[] = [];
+    for (let i = 0; i <= segments; i++) {
+      const angle = (i / segments) * Math.PI * 2;
+      points.push(new THREE.Vector3(Math.cos(angle) * radius, Math.sin(angle) * radius, 0));
+    }
+    return points;
+  };
+
+  // 创建虚线
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...start),
+      new THREE.Vector3(...end)
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 })
+    );
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：看到矩形
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-r, -h, 0], [r, -h, 0], [r, h, 0], [-r, h, 0], [-r, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 轴线 - 虚线 */}
+        <primitive object={createDashedLine([0, -h, 0], [0, h, 0])} />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：看到圆形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line points={createCirclePoints(r)} color="#1f2937" lineWidth={2} />
+      </group>
+    );
+  } else {
+    // 左视图/右视图：看到矩形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-r, -h, 0], [r, -h, 0], [r, h, 0], [-r, h, 0], [-r, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 轴线 - 虚线 */}
+        <Line
+          points={[[0, -h, 0], [0, h, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+      </group>
+    );
+  }
+};
+
+// 圆锥体专用投影视图
+const ConeProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height } = params;
+  const r = width / 2;
+  const h = height / 2;
+  const OFFSET = 0.05;
+
+  // 创建圆形路径点
+  const createCirclePoints = (radius: number, segments: number = 64): THREE.Vector3[] => {
+    const points: THREE.Vector3[] = [];
+    for (let i = 0; i <= segments; i++) {
+      const angle = (i / segments) * Math.PI * 2;
+      points.push(new THREE.Vector3(Math.cos(angle) * radius, Math.sin(angle) * radius, 0));
+    }
+    return points;
+  };
+
+  // 创建虚线
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...start),
+      new THREE.Vector3(...end)
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 })
+    );
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：看到三角形
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-r, -h, 0], [r, -h, 0], [0, h, 0], [-r, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 轴线 - 虚线 */}
+        <primitive object={createDashedLine([0, -h, 0], [0, h, 0])} />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：看到圆形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line points={createCirclePoints(r)} color="#1f2937" lineWidth={2} />
+        {/* 圆心点 */}
+        <mesh position={[0, 0, 0]}>
+          <circleGeometry args={[0.05, 16]} />
+          <meshBasicMaterial color="#1f2937" />
+        </mesh>
+      </group>
+    );
+  } else {
+    // 左视图/右视图：看到三角形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-r, -h, 0], [r, -h, 0], [0, h, 0], [-r, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 轴线 - 虚线 */}
+        <Line
+          points={[[0, -h, 0], [0, h, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+      </group>
+    );
+  }
+};
+
+// 四棱锥专用投影视图
+const PyramidProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height } = params;
+  const r = width / 2;
+  const h = height / 2;
+  const OFFSET = 0.05;
+
+  // 创建虚线
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...start),
+      new THREE.Vector3(...end)
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 })
+    );
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：看到三角形，后面的棱用虚线
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 可见轮廓 */}
+        <Line
+          points={[[-r, -h, 0], [r, -h, 0], [0, h, 0], [-r, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 后面的底边 - 虚线 */}
+        <primitive object={createDashedLine([0, -h, 0], [0, h, 0])} />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：看到正方形底面
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 底面正方形 */}
+        <Line
+          points={[[r, 0, 0], [0, r, 0], [-r, 0, 0], [0, -r, 0], [r, 0, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 从顶点到各角的棱 - 虚线（被遮挡） */}
+        <Line points={[[0, 0, 0], [r, 0, 0]]} color="#1f2937" lineWidth={1.5} dashed dashSize={0.15} gapSize={0.1} />
+        <Line points={[[0, 0, 0], [-r, 0, 0]]} color="#1f2937" lineWidth={1.5} dashed dashSize={0.15} gapSize={0.1} />
+        <Line points={[[0, 0, 0], [0, r, 0]]} color="#1f2937" lineWidth={1.5} dashed dashSize={0.15} gapSize={0.1} />
+        <Line points={[[0, 0, 0], [0, -r, 0]]} color="#1f2937" lineWidth={1.5} dashed dashSize={0.15} gapSize={0.1} />
+      </group>
+    );
+  } else {
+    // 左视图/右视图：看到三角形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[[-r, -h, 0], [r, -h, 0], [0, h, 0], [-r, -h, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 轴线 - 虚线 */}
+        <Line
+          points={[[0, -h, 0], [0, h, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+      </group>
+    );
+  }
+};
+
+// 六棱柱专用投影视图
+const HexPrismProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height } = params;
+  const r = width / 2;
+  const h = height / 2;
+  const OFFSET = 0.05;
+
+  // 六边形顶点（与 CylinderGeometry 的 6 边形一致）
+  const hexPoints: [number, number][] = [];
+  for (let i = 0; i < 6; i++) {
+    const angle = (i * Math.PI) / 3 + Math.PI / 6;
+    hexPoints.push([r * Math.cos(angle), r * Math.sin(angle)]);
+  }
+
+  // 创建虚线
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...start),
+      new THREE.Vector3(...end)
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 })
+    );
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：看到六边形的正面投影（矩形+两个斜边）
+    const leftX = hexPoints[2][0];  // 最左边的点
+    const rightX = hexPoints[5][0]; // 最右边的点
+    const topLeftX = hexPoints[1][0];
+    const topRightX = hexPoints[0][0];
+    
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 可见轮廓 */}
+        <Line
+          points={[
+            [leftX, -h, 0], [rightX, -h, 0], [rightX, h, 0], [leftX, h, 0], [leftX, -h, 0]
+          ]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 后面的棱 - 虚线 */}
+        <primitive object={createDashedLine([topLeftX, -h, 0], [topLeftX, h, 0])} />
+        <primitive object={createDashedLine([topRightX, -h, 0], [topRightX, h, 0])} />
+      </group>
+    );
+  } else if (plane === 'H') {
+    // 俯视图：看到六边形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[
+            ...hexPoints.map(p => [p[0], p[1], 0] as [number, number, number]),
+            [hexPoints[0][0], hexPoints[0][1], 0]
+          ]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  } else {
+    // 左视图/右视图
+    // 注意：父级已有旋转变换，在 XY 平面绘制
+    const frontZ = hexPoints[4][1];  // 最前面的点
+    const backZ = hexPoints[1][1];   // 最后面的点
+    const midZ1 = hexPoints[3][1];
+    const midZ2 = hexPoints[0][1];
+    
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 可见轮廓 */}
+        <Line
+          points={[
+            [backZ, -h, 0], [frontZ, -h, 0], [frontZ, h, 0], [backZ, h, 0], [backZ, -h, 0]
+          ]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 中间的棱 - 虚线 */}
+        <Line
+          points={[[midZ1, -h, 0], [midZ1, h, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
+        <Line
+          points={[[midZ2, -h, 0], [midZ2, h, 0]]}
+          color="#1f2937"
+          lineWidth={1.5}
+          dashed
+          dashSize={0.15}
+          gapSize={0.1}
+        />
       </group>
     );
   }
@@ -664,47 +1542,45 @@ const IntersectingPrismsProjection: React.FC<{ params: GeometryParams; plane: 'V
       </group>
     );
   } else if (plane === 'H') {
-    // 俯视图（从上往下看，XZ平面）：看到两个三棱柱的十字形 + 相贯线
-    const y = 0.01; // 稍微抬高避免z-fighting
+    // 俯视图（从上往下看）：看到两个三棱柱的十字形
+    // 注意：父级已有旋转变换，在 XY 平面绘制
     return (
-      <group position={[0, OFFSET, 0]}>
-        {/* 沿X轴三棱柱的俯视（矩形）- 只画不被遮挡的部分 */}
-        {/* 左边部分 */}
-        <Line points={[[-halfLen, y, -triW], [-triW, y, -triW]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[-halfLen, y, triW], [-triW, y, triW]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[-halfLen, y, -triW], [-halfLen, y, triW]]} color="#1f2937" lineWidth={2} />
+      <group position={[0, 0, OFFSET]}>
+        {/* 沿X轴三棱柱的俯视（矩形）- 左边部分 */}
+        <Line points={[[-halfLen, -triW, 0], [-triW, -triW, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[-halfLen, triW, 0], [-triW, triW, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[-halfLen, -triW, 0], [-halfLen, triW, 0]]} color="#1f2937" lineWidth={2} />
         {/* 右边部分 */}
-        <Line points={[[triW, y, -triW], [halfLen, y, -triW]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[triW, y, triW], [halfLen, y, triW]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[halfLen, y, -triW], [halfLen, y, triW]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[triW, -triW, 0], [halfLen, -triW, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[triW, triW, 0], [halfLen, triW, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[halfLen, -triW, 0], [halfLen, triW, 0]]} color="#1f2937" lineWidth={2} />
         
-        {/* 沿Z轴三棱柱的俯视（矩形）- 只画不被遮挡的部分 */}
-        {/* 上边部分（远离观察者） */}
-        <Line points={[[-triW, y, -halfLen], [-triW, y, -triW]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[triW, y, -halfLen], [triW, y, -triW]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[-triW, y, -halfLen], [triW, y, -halfLen]]} color="#1f2937" lineWidth={2} />
-        {/* 下边部分（靠近观察者） */}
-        <Line points={[[-triW, y, triW], [-triW, y, halfLen]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[triW, y, triW], [triW, y, halfLen]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[-triW, y, halfLen], [triW, y, halfLen]]} color="#1f2937" lineWidth={2} />
+        {/* 沿Z轴三棱柱的俯视（矩形）- 上边部分 */}
+        <Line points={[[-triW, -halfLen, 0], [-triW, -triW, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[triW, -halfLen, 0], [triW, -triW, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[-triW, -halfLen, 0], [triW, -halfLen, 0]]} color="#1f2937" lineWidth={2} />
+        {/* 下边部分 */}
+        <Line points={[[-triW, triW, 0], [-triW, halfLen, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[triW, triW, 0], [triW, halfLen, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[-triW, halfLen, 0], [triW, halfLen, 0]]} color="#1f2937" lineWidth={2} />
         
-        {/* 相贯线 - 两个矩形相交处的四条边（中心正方形）- 用稍粗的线突出 */}
-        <Line points={[[-triW, y + 0.01, -triW], [-triW, y + 0.01, triW]]} color="#1f2937" lineWidth={2.5} />
-        <Line points={[[triW, y + 0.01, -triW], [triW, y + 0.01, triW]]} color="#1f2937" lineWidth={2.5} />
-        <Line points={[[-triW, y + 0.01, -triW], [triW, y + 0.01, -triW]]} color="#1f2937" lineWidth={2.5} />
-        <Line points={[[-triW, y + 0.01, triW], [triW, y + 0.01, triW]]} color="#1f2937" lineWidth={2.5} />
+        {/* 相贯线 - 中心正方形 */}
+        <Line points={[[-triW, -triW, 0], [-triW, triW, 0]]} color="#1f2937" lineWidth={2.5} />
+        <Line points={[[triW, -triW, 0], [triW, triW, 0]]} color="#1f2937" lineWidth={2.5} />
+        <Line points={[[-triW, -triW, 0], [triW, -triW, 0]]} color="#1f2937" lineWidth={2.5} />
+        <Line points={[[-triW, triW, 0], [triW, triW, 0]]} color="#1f2937" lineWidth={2.5} />
       </group>
     );
   } else {
-    // 左视图/右视图（从侧面看，YZ平面）：看到沿Z轴的三棱柱侧面 + 沿X轴的三棱柱端面
-    const posX = plane === 'W' ? -OFFSET : OFFSET;
+    // 左视图/右视图（从侧面看）
+    // 注意：父级已有旋转变换，在 XY 平面绘制
     return (
-      <group position={[posX, 0, 0]}>
+      <group position={[0, 0, OFFSET]}>
         {/* 沿Z轴三棱柱的侧面轮廓（矩形） */}
         <Line
           points={[
-            [0, topY, -halfLen], [0, topY, halfLen],
-            [0, botY, halfLen], [0, botY, -halfLen], [0, topY, -halfLen]
+            [-halfLen, topY, 0], [halfLen, topY, 0],
+            [halfLen, botY, 0], [-halfLen, botY, 0], [-halfLen, topY, 0]
           ]}
           color="#1f2937"
           lineWidth={2}
@@ -712,7 +1588,7 @@ const IntersectingPrismsProjection: React.FC<{ params: GeometryParams; plane: 'V
         {/* 沿X轴三棱柱的端面（三角形）- 相贯线 */}
         <Line
           points={[
-            [0, topY, 0], [0, botY, -triW], [0, botY, triW], [0, topY, 0]
+            [0, topY, 0], [-triW, botY, 0], [triW, botY, 0], [0, topY, 0]
           ]}
           color="#1f2937"
           lineWidth={2}
@@ -724,6 +1600,61 @@ const IntersectingPrismsProjection: React.FC<{ params: GeometryParams; plane: 'V
 
 export const ProjectedView: React.FC<ProjectedViewProps> = ({ type, params, plane }) => {
   const geometry = useGeometryFactory(type, params);
+  
+  // 立方体使用专门的投影视图
+  if (type === GeometryType.CUBE) {
+    return <CubeProjection params={params} plane={plane} />;
+  }
+  
+  // 切角块使用专门的投影视图
+  if (type === GeometryType.CUT_BLOCK) {
+    return <CutBlockProjection params={params} plane={plane} />;
+  }
+  
+  // L形块使用专门的投影视图
+  if (type === GeometryType.L_SHAPE) {
+    return <LShapeProjection params={params} plane={plane} />;
+  }
+  
+  // 楔形块使用专门的投影视图
+  if (type === GeometryType.WEDGE) {
+    return <WedgeProjection params={params} plane={plane} />;
+  }
+  
+  // T形块使用专门的投影视图
+  if (type === GeometryType.T_SHAPE) {
+    return <TShapeProjection params={params} plane={plane} />;
+  }
+  
+  // 十字形块使用专门的投影视图
+  if (type === GeometryType.CROSS_SHAPE) {
+    return <CrossShapeProjection params={params} plane={plane} />;
+  }
+  
+  // 阶梯块使用专门的投影视图
+  if (type === GeometryType.STEPPED_BLOCK) {
+    return <SteppedBlockProjection params={params} plane={plane} />;
+  }
+  
+  // 圆柱体使用专门的投影视图
+  if (type === GeometryType.CYLINDER) {
+    return <CylinderProjection params={params} plane={plane} />;
+  }
+  
+  // 圆锥体使用专门的投影视图
+  if (type === GeometryType.CONE) {
+    return <ConeProjection params={params} plane={plane} />;
+  }
+  
+  // 四棱锥使用专门的投影视图
+  if (type === GeometryType.PYRAMID) {
+    return <PyramidProjection params={params} plane={plane} />;
+  }
+  
+  // 六棱柱使用专门的投影视图
+  if (type === GeometryType.HEX_PRISM) {
+    return <HexPrismProjection params={params} plane={plane} />;
+  }
   
   // 空心圆柱使用专门的投影视图
   if (type === GeometryType.HOLLOW_CYLINDER) {
@@ -750,6 +1681,7 @@ export const ProjectedView: React.FC<ProjectedViewProps> = ({ type, params, plan
     return <SphereProjection params={params} plane={plane} />;
   }
   
+  // 默认：使用压扁方式（用于 CUBE 等简单几何体）
   let scale: [number, number, number] = [1, 1, 1];
   let position: [number, number, number] = [0, 0, 0];
   const OFFSET = 0.05;

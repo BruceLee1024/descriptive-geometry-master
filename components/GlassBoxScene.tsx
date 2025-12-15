@@ -1,4 +1,4 @@
-import React, { useRef, Suspense } from 'react';
+import React, { useRef, Suspense, useCallback } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
 import { Grid, OrbitControls, PerspectiveCamera, OrthographicCamera, Edges, Line } from '@react-three/drei';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import { GeometryType, GeometryParams } from '../types';
 import { MainObject, ProjectedView, COLORS, PlaneLabel, ProjectorRays, useGeometryFactory } from './SceneComponents';
 import { SketchBuilder } from './SketchBuilder';
+import { SectionPlane, SectionLine2D } from './SectionPlane';
+import { SectionResult } from '../utils/sectionPlane';
 
 interface GlassBoxSceneProps {
   geometryType: GeometryType;
@@ -20,6 +22,11 @@ interface GlassBoxSceneProps {
   drawnPoints?: [number, number][];
   drawnDepth?: number;
   onDrawComplete?: (points: [number, number][], depth: number) => void;
+  // 截平面相关
+  showSectionPlane?: boolean;
+  sectionPlanePosition?: [number, number, number];
+  sectionPlaneRotation?: [number, number, number];
+  onSectionChange?: (result: SectionResult | null) => void;
 }
 
 // 自定义模型组件
@@ -272,8 +279,18 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
     drawCompleted = false,
     drawnPoints = [],
     drawnDepth = 2,
-    onDrawComplete
+    onDrawComplete,
+    showSectionPlane = false,
+    sectionPlanePosition = [0, 0, 0],
+    sectionPlaneRotation = [0, 0, 0],
+    onSectionChange
 }) => {
+  const [sectionResult, setSectionResult] = React.useState<SectionResult | null>(null);
+  
+  const handleSectionChange = useCallback((result: SectionResult | null) => {
+    setSectionResult(result);
+    onSectionChange?.(result);
+  }, [onSectionChange]);
   const BOX_SIZE = 5;
   const EXPLODE_GAP = 1.5;
   
@@ -399,6 +416,18 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
           {showProjectors && !isUnfolded && !isCustom && !isDrawCompleted && (
               <ProjectorRays params={geometryParams} geometryType={geometryType} explodeGap={EXPLODE_GAP} />
           )}
+          
+          {/* 截平面 */}
+          {showSectionPlane && !isCustom && (
+            <SectionPlane
+              geometry={geometry}
+              enabled={showSectionPlane}
+              planePosition={sectionPlanePosition}
+              planeRotation={sectionPlaneRotation}
+              planeSize={4}
+              onSectionChange={handleSectionChange}
+            />
+          )}
         </group>
       )}
 
@@ -420,6 +449,9 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
         </mesh>
         <PlaneLabel text="V (主视图)" position={[0, BOX_SIZE / 2 + 0.3, 0.1]} />
         {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="V" />}
+        {showSectionPlane && sectionResult && (
+          <SectionLine2D sectionResult={sectionResult} plane="V" />
+        )}
       </group>}
 
       {/* H面 (俯视图 - 底面，展开时向下炸开) */}
@@ -433,12 +465,10 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
                 </mesh>
                 <PlaneLabel text="H (俯视图)" position={[0, -BOX_SIZE / 2 + 0.3, 0.1]} />
                 
-                <group rotation={[-Math.PI/2, 0, 0]} position={[0, 0, 0.05]}> 
-                    <mesh scale={[1, 0.001, 1]} geometry={geometry}>
-                       <Edges threshold={15} color="#1f2937" lineWidth={2} />
-                       <meshBasicMaterial color="#1f2937" transparent opacity={0.08} />
-                    </mesh>
-                </group>
+                {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="H" />}
+                {showSectionPlane && sectionResult && (
+                  <SectionLine2D sectionResult={sectionResult} plane="H" />
+                )}
              </group>
           </group>
       </group>}
@@ -454,12 +484,10 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
               </mesh>
               <PlaneLabel text="W (左视图)" position={[0, BOX_SIZE / 2 + 0.3, 0.1]} />
 
-              <group rotation={[0, Math.PI/2, 0]} position={[0, 0, 0.05]}>
-                 <mesh scale={[0.001, 1, 1]} geometry={geometry}>
-                    <Edges threshold={15} color="#1f2937" lineWidth={2} />
-                    <meshBasicMaterial color="#1f2937" transparent opacity={0.08} />
-                 </mesh>
-              </group>
+              {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="W" />}
+              {showSectionPlane && sectionResult && (
+                <SectionLine2D sectionResult={sectionResult} plane="W" />
+              )}
             </group>
           </group>
       </group>}
@@ -475,12 +503,10 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
                 </mesh>
                 <PlaneLabel text="R (右视图)" position={[0, BOX_SIZE / 2 + 0.3, 0.1]} />
 
-                <group rotation={[0, -Math.PI/2, 0]} position={[0, 0, 0.05]}>
-                   <mesh scale={[0.001, 1, 1]} geometry={geometry}>
-                      <Edges threshold={15} color="#1f2937" lineWidth={2} />
-                      <meshBasicMaterial color="#1f2937" transparent opacity={0.08} />
-                   </mesh>
-                </group>
+                {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="R" />}
+                {showSectionPlane && sectionResult && (
+                  <SectionLine2D sectionResult={sectionResult} plane="R" />
+                )}
              </group>
           </group>
       </group>}

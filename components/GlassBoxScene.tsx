@@ -1,4 +1,4 @@
-import React, { useRef, Suspense, useCallback } from 'react';
+import React, { useRef, Suspense, useCallback, useMemo } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
 import { Grid, OrbitControls, PerspectiveCamera, OrthographicCamera, Edges, Line } from '@react-three/drei';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -65,7 +65,399 @@ const CustomModelObject: React.FC<{ url: string; scale: number }> = ({ url, scal
   );
 };
 
+// 自定义模型投影组件 - 使用边缘检测生成投影线
+interface CustomModelProjectionProps {
+  url: string;
+  scale: number;
+  plane: 'V' | 'H' | 'W' | 'R';
+}
 
+const CustomModelProjection: React.FC<CustomModelProjectionProps> = ({ url, scale, plane }) => {
+  const gltf = useLoader(GLTFLoader, url);
+  const OFFSET = 0.05;
+  
+  const { geometry, normalizedScale } = useMemo(() => {
+    const geometries: THREE.BufferGeometry[] = [];
+    
+    // 计算包围盒用于居中和缩放
+    const box = new THREE.Box3().setFromObject(gltf.scene);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const normalizedScale = maxDim > 0 ? 2 / maxDim : 1;
+    
+    gltf.scene.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.geometry) {
+        const clonedGeometry = child.geometry.clone();
+        child.updateMatrixWorld();
+        clonedGeometry.applyMatrix4(child.matrixWorld);
+        geometries.push(clonedGeometry);
+      }
+    });
+    
+    if (geometries.length === 0) {
+      return { geometry: new THREE.BoxGeometry(1, 1, 1), normalizedScale: 1 };
+    }
+    
+    // 合并所有几何体（转换为非索引几何体以确保正确处理）
+    let mergedGeometry: THREE.BufferGeometry;
+    if (geometries.length === 1) {
+      mergedGeometry = geometries[0].index ? geometries[0].toNonIndexed() : geometries[0];
+    } else {
+      // 先将所有几何体转换为非索引几何体
+      const nonIndexedGeometries = geometries.map(geo => 
+        geo.index ? geo.toNonIndexed() : geo
+      );
+      
+      let totalVertices = 0;
+      nonIndexedGeometries.forEach(geo => {
+        totalVertices += geo.attributes.position.count;
+      });
+      
+      const positions = new Float32Array(totalVertices * 3);
+      let posOffset = 0;
+      
+      nonIndexedGeometries.forEach(geo => {
+        const pos = geo.attributes.position.array;
+        positions.set(pos, posOffset);
+        posOffset += pos.length;
+      });
+      
+      mergedGeometry = new THREE.BufferGeometry();
+      mergedGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      mergedGeometry.computeVertexNormals();
+    }
+    
+    // 居中几何体
+    mergedGeometry.translate(-center.x, -center.y, -center.z);
+    
+    return { geometry: mergedGeometry, normalizedScale };
+  }, [gltf]);
+  
+  // 根据投影面设置缩放和位置
+  let scaleVec: [number, number, number] = [1, 1, 1];
+  let position: [number, number, number] = [0, 0, 0];
+  const finalScale = normalizedScale * scale;
+
+  if (plane === 'V') {
+    // 主视图：压扁Z轴
+    scaleVec = [finalScale, finalScale, 0.001];
+    position = [0, 0, OFFSET];
+  } else if (plane === 'H') {
+    // 俯视图：压扁Y轴（注意父级已有旋转变换）
+    scaleVec = [finalScale, finalScale, 0.001];
+    position = [0, 0, OFFSET];
+  } else if (plane === 'W') {
+    // 左视图：压扁X轴（注意父级已有旋转变换）
+    scaleVec = [finalScale, finalScale, 0.001];
+    position = [0, 0, OFFSET];
+  } else if (plane === 'R') {
+    // 右视图：压扁X轴（注意父级已有旋转变换）
+    scaleVec = [finalScale, finalScale, 0.001];
+    position = [0, 0, OFFSET];
+  }
+
+  // 根据投影面旋转几何体以获得正确的投影
+  const projectedGeometry = useMemo(() => {
+    const geo = geometry.clone();
+    
+    if (plane === 'H') {
+      // 俯视图：绕X轴旋转-90度，然后压扁
+      geo.rotateX(-Math.PI / 2);
+    } else if (plane === 'W') {
+      // 左视图：绕Y轴旋转90度
+      geo.rotateY(Math.PI / 2);
+    } else if (plane === 'R') {
+      // 右视图：绕Y轴旋转-90度
+      geo.rotateY(-Math.PI / 2);
+    }
+    // V面（主视图）不需要旋转
+    
+    return geo;
+  }, [geometry, plane]);
+
+  return (
+    <group position={position}>
+      <mesh scale={scaleVec} geometry={projectedGeometry}>
+        <Edges threshold={15} color="#1f2937" lineWidth={2} />
+        <meshBasicMaterial color="#1f2937" transparent opacity={0.08} />
+      </mesh>
+    </group>
+  );
+};
+
+// 自定义模型截平面组件 - 包装 SectionPlane 以支持自定义模型
+interface CustomModelSectionPlaneProps {
+  url: string;
+  scale: number;
+  enabled: boolean;
+  planePosition: [number, number, number];
+  planeRotation: [number, number, number];
+  planeSize?: number;
+  onSectionChange?: (result: SectionResult | null) => void;
+}
+
+const CustomModelSectionPlane: React.FC<CustomModelSectionPlaneProps> = ({
+  url,
+  scale,
+  enabled,
+  planePosition,
+  planeRotation,
+  planeSize = 4,
+  onSectionChange
+}) => {
+  const gltf = useLoader(GLTFLoader, url);
+  
+  // 获取合并后的几何体（与投影组件使用相同的逻辑）
+  const geometry = useMemo(() => {
+    const geometries: THREE.BufferGeometry[] = [];
+    
+    // 计算包围盒用于居中和缩放
+    const box = new THREE.Box3().setFromObject(gltf.scene);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const normalizedScale = maxDim > 0 ? 2 / maxDim : 1;
+    const finalScale = normalizedScale * scale;
+    
+    gltf.scene.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.geometry) {
+        const clonedGeometry = child.geometry.clone();
+        child.updateMatrixWorld();
+        clonedGeometry.applyMatrix4(child.matrixWorld);
+        geometries.push(clonedGeometry);
+      }
+    });
+    
+    if (geometries.length === 0) {
+      return new THREE.BoxGeometry(1, 1, 1);
+    }
+    
+    // 合并所有几何体（转换为非索引几何体以确保正确处理截交线计算）
+    let mergedGeometry: THREE.BufferGeometry;
+    if (geometries.length === 1) {
+      mergedGeometry = geometries[0].index ? geometries[0].toNonIndexed() : geometries[0];
+    } else {
+      // 先将所有几何体转换为非索引几何体
+      const nonIndexedGeometries = geometries.map(geo => 
+        geo.index ? geo.toNonIndexed() : geo
+      );
+      
+      let totalVertices = 0;
+      nonIndexedGeometries.forEach(geo => {
+        totalVertices += geo.attributes.position.count;
+      });
+      
+      const positions = new Float32Array(totalVertices * 3);
+      let posOffset = 0;
+      
+      nonIndexedGeometries.forEach(geo => {
+        const pos = geo.attributes.position.array;
+        positions.set(pos, posOffset);
+        posOffset += pos.length;
+      });
+      
+      mergedGeometry = new THREE.BufferGeometry();
+      mergedGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      mergedGeometry.computeVertexNormals();
+    }
+    
+    // 居中几何体
+    mergedGeometry.translate(-center.x, -center.y, -center.z);
+    
+    // 应用缩放
+    mergedGeometry.scale(finalScale, finalScale, finalScale);
+    
+    return mergedGeometry;
+  }, [gltf, scale]);
+  
+  return (
+    <SectionPlane
+      geometry={geometry}
+      enabled={enabled}
+      planePosition={planePosition}
+      planeRotation={planeRotation}
+      planeSize={planeSize}
+      onSectionChange={onSectionChange}
+    />
+  );
+};
+
+// 自定义模型投影线组件 - 显示从模型轮廓线顶点到各投影面的投影线和投影点
+interface CustomModelProjectorRaysProps {
+  url: string;
+  scale: number;
+  explodeGap?: number;
+}
+
+const CustomModelProjectorRays: React.FC<CustomModelProjectorRaysProps> = ({
+  url,
+  scale,
+  explodeGap = 0
+}) => {
+  const gltf = useLoader(GLTFLoader, url);
+  const BOX_SIZE = 5;
+  
+  // 提取关键点：极值点 + 拐点检测
+  const cornerPoints = useMemo(() => {
+    const box = new THREE.Box3().setFromObject(gltf.scene);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const normalizedScale = maxDim > 0 ? 2 / maxDim : 1;
+    const finalScale = normalizedScale * scale;
+    
+    // 收集所有轮廓线的边
+    const edges: [THREE.Vector3, THREE.Vector3][] = [];
+    const allPoints: THREE.Vector3[] = [];
+    
+    gltf.scene.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.geometry) {
+        const edgesGeometry = new THREE.EdgesGeometry(child.geometry, 15);
+        const positions = edgesGeometry.getAttribute('position');
+        
+        if (positions) {
+          child.updateMatrixWorld();
+          
+          for (let i = 0; i < positions.count; i += 2) {
+            const p1 = new THREE.Vector3().fromBufferAttribute(positions, i);
+            const p2 = new THREE.Vector3().fromBufferAttribute(positions, i + 1);
+            p1.applyMatrix4(child.matrixWorld).sub(center).multiplyScalar(finalScale);
+            p2.applyMatrix4(child.matrixWorld).sub(center).multiplyScalar(finalScale);
+            edges.push([p1, p2]);
+            allPoints.push(p1, p2);
+          }
+        }
+        edgesGeometry.dispose();
+      }
+    });
+    
+    const keyPoints: THREE.Vector3[] = [];
+    const tolerance = 0.1;
+    
+    const addUniquePoint = (p: THREE.Vector3) => {
+      if (!keyPoints.some(existing => existing.distanceTo(p) < tolerance)) {
+        keyPoints.push(p.clone());
+      }
+    };
+    
+    // 方法1：极值点检测 - 找 X/Y/Z 各轴的最大最小值点
+    if (allPoints.length > 0) {
+      let minX = allPoints[0], maxX = allPoints[0];
+      let minY = allPoints[0], maxY = allPoints[0];
+      let minZ = allPoints[0], maxZ = allPoints[0];
+      
+      for (const p of allPoints) {
+        if (p.x < minX.x) minX = p;
+        if (p.x > maxX.x) maxX = p;
+        if (p.y < minY.y) minY = p;
+        if (p.y > maxY.y) maxY = p;
+        if (p.z < minZ.z) minZ = p;
+        if (p.z > maxZ.z) maxZ = p;
+      }
+      
+      addUniquePoint(minX);
+      addUniquePoint(maxX);
+      addUniquePoint(minY);
+      addUniquePoint(maxY);
+      addUniquePoint(minZ);
+      addUniquePoint(maxZ);
+    }
+    
+    // 方法2：拐点检测 - 找多条边交汇的顶点（度数 >= 3）
+    const vertexDegree = new Map<string, { point: THREE.Vector3; count: number }>();
+    const pointKey = (p: THREE.Vector3) => 
+      `${Math.round(p.x / tolerance)},${Math.round(p.y / tolerance)},${Math.round(p.z / tolerance)}`;
+    
+    for (const [p1, p2] of edges) {
+      const key1 = pointKey(p1);
+      const key2 = pointKey(p2);
+      
+      if (!vertexDegree.has(key1)) vertexDegree.set(key1, { point: p1, count: 0 });
+      if (!vertexDegree.has(key2)) vertexDegree.set(key2, { point: p2, count: 0 });
+      
+      vertexDegree.get(key1)!.count++;
+      vertexDegree.get(key2)!.count++;
+    }
+    
+    // 度数 >= 3 的点是拐点（多条边交汇）
+    for (const { point, count } of vertexDegree.values()) {
+      if (count >= 3) {
+        addUniquePoint(point);
+      }
+    }
+    
+    return keyPoints.map(p => [p.x, p.y, p.z] as [number, number, number]);
+  }, [gltf, scale]);
+  
+  // 创建投影线
+  const createProjector = (
+    start: [number, number, number],
+    end: [number, number, number],
+    key: string
+  ) => {
+    const dist = Math.sqrt(
+      Math.pow(end[0] - start[0], 2) +
+      Math.pow(end[1] - start[1], 2) +
+      Math.pow(end[2] - start[2], 2)
+    );
+    
+    if (dist < 0.1) return null;
+    
+    return (
+      <React.Fragment key={key}>
+        <Line
+          points={[start, end]}
+          color={COLORS.PROJECTOR_LINE}
+          dashed
+          dashSize={0.15}
+          gapSize={0.08}
+          opacity={0.6}
+          transparent
+          lineWidth={1}
+        />
+        {/* 投影点 */}
+        <mesh position={end}>
+          <sphereGeometry args={[0.06, 8, 8]} />
+          <meshBasicMaterial color={COLORS.PROJECTOR_LINE} />
+        </mesh>
+      </React.Fragment>
+    );
+  };
+  
+  return (
+    <group>
+      {cornerPoints.map((p, i) => (
+        <React.Fragment key={i}>
+          {/* 到V面（主视图）的投影线 - Z方向 */}
+          {createProjector(
+            p,
+            [p[0], p[1], -BOX_SIZE / 2 - explodeGap],
+            `v-${i}`
+          )}
+          {/* 到H面（俯视图）的投影线 - Y方向 */}
+          {createProjector(
+            p,
+            [p[0], -BOX_SIZE / 2 - explodeGap, p[2]],
+            `h-${i}`
+          )}
+          {/* 到W面（左视图）的投影线 - X方向（正方向） */}
+          {createProjector(
+            p,
+            [BOX_SIZE / 2 + explodeGap, p[1], p[2]],
+            `w-${i}`
+          )}
+          {/* 到R面（右视图）的投影线 - X方向（负方向） */}
+          {createProjector(
+            p,
+            [-BOX_SIZE / 2 - explodeGap, p[1], p[2]],
+            `r-${i}`
+          )}
+        </React.Fragment>
+      ))}
+    </group>
+  );
+};
 
 // 轴测投影视图组件
 interface AxonometricViewProps {
@@ -416,8 +808,17 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
           {showProjectors && !isUnfolded && !isCustom && !isDrawCompleted && (
               <ProjectorRays params={geometryParams} geometryType={geometryType} explodeGap={EXPLODE_GAP} />
           )}
+          {showProjectors && !isUnfolded && isCustom && geometryParams.customModelUrl && (
+            <Suspense fallback={null}>
+              <CustomModelProjectorRays
+                url={geometryParams.customModelUrl}
+                scale={geometryParams.customModelScale || 1}
+                explodeGap={EXPLODE_GAP}
+              />
+            </Suspense>
+          )}
           
-          {/* 截平面 */}
+          {/* 截平面 - 标准几何体 */}
           {showSectionPlane && !isCustom && (
             <SectionPlane
               geometry={geometry}
@@ -427,6 +828,21 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
               planeSize={4}
               onSectionChange={handleSectionChange}
             />
+          )}
+          
+          {/* 截平面 - 自定义模型 */}
+          {showSectionPlane && isCustom && geometryParams.customModelUrl && (
+            <Suspense fallback={null}>
+              <CustomModelSectionPlane
+                url={geometryParams.customModelUrl}
+                scale={geometryParams.customModelScale || 1}
+                enabled={showSectionPlane}
+                planePosition={sectionPlanePosition}
+                planeRotation={sectionPlaneRotation}
+                planeSize={4}
+                onSectionChange={handleSectionChange}
+              />
+            </Suspense>
           )}
         </group>
       )}
@@ -449,6 +865,15 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
         </mesh>
         <PlaneLabel text="V (主视图)" position={[0, BOX_SIZE / 2 + 0.3, 0.1]} />
         {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="V" />}
+        {isCustom && geometryParams.customModelUrl && (
+          <Suspense fallback={null}>
+            <CustomModelProjection 
+              url={geometryParams.customModelUrl} 
+              scale={geometryParams.customModelScale || 1} 
+              plane="V" 
+            />
+          </Suspense>
+        )}
         {showSectionPlane && sectionResult && (
           <SectionLine2D sectionResult={sectionResult} plane="V" />
         )}
@@ -466,6 +891,15 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
                 <PlaneLabel text="H (俯视图)" position={[0, -BOX_SIZE / 2 + 0.3, 0.1]} />
                 
                 {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="H" />}
+                {isCustom && geometryParams.customModelUrl && (
+                  <Suspense fallback={null}>
+                    <CustomModelProjection 
+                      url={geometryParams.customModelUrl} 
+                      scale={geometryParams.customModelScale || 1} 
+                      plane="H" 
+                    />
+                  </Suspense>
+                )}
                 {showSectionPlane && sectionResult && (
                   <SectionLine2D sectionResult={sectionResult} plane="H" />
                 )}
@@ -485,6 +919,15 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
               <PlaneLabel text="W (左视图)" position={[0, BOX_SIZE / 2 + 0.3, 0.1]} />
 
               {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="W" />}
+              {isCustom && geometryParams.customModelUrl && (
+                <Suspense fallback={null}>
+                  <CustomModelProjection 
+                    url={geometryParams.customModelUrl} 
+                    scale={geometryParams.customModelScale || 1} 
+                    plane="W" 
+                  />
+                </Suspense>
+              )}
               {showSectionPlane && sectionResult && (
                 <SectionLine2D sectionResult={sectionResult} plane="W" />
               )}
@@ -504,6 +947,15 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
                 <PlaneLabel text="R (右视图)" position={[0, BOX_SIZE / 2 + 0.3, 0.1]} />
 
                 {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="R" />}
+                {isCustom && geometryParams.customModelUrl && (
+                  <Suspense fallback={null}>
+                    <CustomModelProjection 
+                      url={geometryParams.customModelUrl} 
+                      scale={geometryParams.customModelScale || 1} 
+                      plane="R" 
+                    />
+                  </Suspense>
+                )}
                 {showSectionPlane && sectionResult && (
                   <SectionLine2D sectionResult={sectionResult} plane="R" />
                 )}

@@ -163,13 +163,14 @@ export const SectionLine2D: React.FC<SectionLine2DProps> = ({
     }
     
     return sectionResult.loops.map(loop => {
-      if (loop.points.length < 3) return null;
+      // 至少需要2个点才能画线
+      if (loop.points.length < 2) return null;
       
       const points2D = projectSectionToView(loop.points, plane);
       const pts = points2D.map(([x, y]) => [x, y, 0] as [number, number, number]);
       
-      if (loop.isClosed && pts.length > 0) {
-        pts.push(pts[0]); // 闭合
+      if (loop.isClosed && pts.length > 2) {
+        pts.push(pts[0]); // 闭合（只有3个点以上才闭合）
       }
       
       return pts;

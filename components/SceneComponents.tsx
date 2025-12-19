@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { Edges, Text, Line } from '@react-three/drei';
 import { GeometryType, GeometryParams } from '../types';
-import { ADDITION, Evaluator, Brush } from 'three-bvh-csg';
+import { ADDITION, INTERSECTION, Evaluator, Brush } from 'three-bvh-csg';
 
 // 优化后的配色方案 - 更柔和协调
 export const COLORS = {
@@ -305,12 +305,91 @@ interface MainObjectProps {
   customModelComponent?: React.ReactNode;
 }
 
+// 计算相贯三棱柱的相贯线几何体
+const useIntersectionLineGeometry = (params: GeometryParams) => {
+  const { width, height, depth } = params;
+  
+  return useMemo(() => {
+    const prismRadius = Math.min(width, height) * 0.4;
+    const prismLength = depth * 1.8;
+    
+    // 创建等边三角形截面
+    const createTriangleShape = () => {
+      const shape = new THREE.Shape();
+      const r = prismRadius;
+      shape.moveTo(0, r);
+      shape.lineTo(-r * 0.866, -r * 0.5);
+      shape.lineTo(r * 0.866, -r * 0.5);
+      shape.closePath();
+      return shape;
+    };
+    
+    // 第一个三棱柱（沿X轴）
+    const geo1 = new THREE.ExtrudeGeometry(createTriangleShape(), { 
+      depth: prismLength, 
+      bevelEnabled: false 
+    });
+    geo1.rotateY(Math.PI / 2);
+    geo1.translate(prismLength / 2, 0, 0);
+    geo1.center();
+    
+    // 第二个三棱柱（沿Z轴）
+    const geo2 = new THREE.ExtrudeGeometry(createTriangleShape(), { 
+      depth: prismLength, 
+      bevelEnabled: false 
+    });
+    geo2.translate(0, 0, -prismLength / 2);
+    geo2.center();
+    
+    // 使用 CSG 求交集
+    const evaluator = new Evaluator();
+    const brush1 = new Brush(geo1);
+    const brush2 = new Brush(geo2);
+    const intersectionResult = evaluator.evaluate(brush1, brush2, INTERSECTION);
+    
+    // 提取交集的边缘（阈值设低，确保所有棱都出来）
+    const edgesGeometry = new THREE.EdgesGeometry(intersectionResult.geometry, 1);
+    
+    // 清理
+    geo1.dispose();
+    geo2.dispose();
+    intersectionResult.geometry.dispose();
+    
+    return edgesGeometry;
+  }, [width, height, depth]);
+};
+
 export const MainObject: React.FC<MainObjectProps> = ({ type, params, opacity = 1, customModelComponent }) => {
   const geometry = useGeometryFactory(type, params);
+  const intersectionLineGeometry = useIntersectionLineGeometry(params);
 
   // 如果是自定义模型，渲染传入的组件
   if (type === GeometryType.CUSTOM && customModelComponent) {
     return <>{customModelComponent}</>;
+  }
+
+  // 相贯三棱柱需要额外显示相贯线
+  if (type === GeometryType.INTERSECTING_PRISMS) {
+    return (
+      <group>
+        <mesh castShadow receiveShadow geometry={geometry}>
+          <meshStandardMaterial 
+            color={COLORS.OBJECT} 
+            transparent 
+            opacity={opacity} 
+            metalness={0.2}
+            roughness={0.4}
+            emissive={COLORS.OBJECT}
+            emissiveIntensity={0.1}
+          />
+          <Edges color={COLORS.OBJECT_EDGE} threshold={15} lineWidth={1.5} />
+        </mesh>
+        {/* 相贯线 - 红色高亮显示 */}
+        <lineSegments geometry={intersectionLineGeometry} scale={[1.002, 1.002, 1.002]}>
+          <lineBasicMaterial color="#ef4444" linewidth={2} />
+        </lineSegments>
+      </group>
+    );
   }
 
   return (
@@ -1542,33 +1621,43 @@ const IntersectingPrismsProjection: React.FC<{ params: GeometryParams; plane: 'V
       </group>
     );
   } else if (plane === 'H') {
-    // 俯视图（从上往下看）：看到两个三棱柱的十字形
+    // 俯视图（从上往下看）：看到两个三棱柱的十字形轮廓
     // 注意：父级已有旋转变换，在 XY 平面绘制
+    // 十字形由两个矩形相交组成，只画外轮廓
     return (
       <group position={[0, 0, OFFSET]}>
-        {/* 沿X轴三棱柱的俯视（矩形）- 左边部分 */}
-        <Line points={[[-halfLen, -triW, 0], [-triW, -triW, 0]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[-halfLen, triW, 0], [-triW, triW, 0]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[-halfLen, -triW, 0], [-halfLen, triW, 0]]} color="#1f2937" lineWidth={2} />
-        {/* 右边部分 */}
-        <Line points={[[triW, -triW, 0], [halfLen, -triW, 0]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[triW, triW, 0], [halfLen, triW, 0]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[halfLen, -triW, 0], [halfLen, triW, 0]]} color="#1f2937" lineWidth={2} />
-        
-        {/* 沿Z轴三棱柱的俯视（矩形）- 上边部分 */}
-        <Line points={[[-triW, -halfLen, 0], [-triW, -triW, 0]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[triW, -halfLen, 0], [triW, -triW, 0]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[-triW, -halfLen, 0], [triW, -halfLen, 0]]} color="#1f2937" lineWidth={2} />
-        {/* 下边部分 */}
-        <Line points={[[-triW, triW, 0], [-triW, halfLen, 0]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[triW, triW, 0], [triW, halfLen, 0]]} color="#1f2937" lineWidth={2} />
-        <Line points={[[-triW, halfLen, 0], [triW, halfLen, 0]]} color="#1f2937" lineWidth={2} />
-        
-        {/* 相贯线 - 中心正方形 */}
-        <Line points={[[-triW, -triW, 0], [-triW, triW, 0]]} color="#1f2937" lineWidth={2.5} />
-        <Line points={[[triW, -triW, 0], [triW, triW, 0]]} color="#1f2937" lineWidth={2.5} />
-        <Line points={[[-triW, -triW, 0], [triW, -triW, 0]]} color="#1f2937" lineWidth={2.5} />
-        <Line points={[[-triW, triW, 0], [triW, triW, 0]]} color="#1f2937" lineWidth={2.5} />
+        {/* 十字形外轮廓 - 顺时针绘制 */}
+        <Line
+          points={[
+            // 从左上角开始，顺时针
+            [-halfLen, triW, 0],   // 左上
+            [-triW, triW, 0],      // 左上内角
+            [-triW, halfLen, 0],   // 上左
+            [triW, halfLen, 0],    // 上右
+            [triW, triW, 0],       // 右上内角
+            [halfLen, triW, 0],    // 右上
+            [halfLen, -triW, 0],   // 右下
+            [triW, -triW, 0],      // 右下内角
+            [triW, -halfLen, 0],   // 下右
+            [-triW, -halfLen, 0],  // 下左
+            [-triW, -triW, 0],     // 左下内角
+            [-halfLen, -triW, 0],  // 左下
+            [-halfLen, triW, 0],   // 回到左上
+          ]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        {/* 相贯线 - X形对角线（两个三棱柱相交处的投影） */}
+        <Line
+          points={[[-triW, -triW, 0], [triW, triW, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+        <Line
+          points={[[-triW, triW, 0], [triW, -triW, 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
       </group>
     );
   } else {

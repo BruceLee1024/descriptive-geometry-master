@@ -10,15 +10,23 @@ import {
 import { GlassBoxScene } from './components/GlassBoxScene';
 import { HomePage } from './components/HomePage';
 import { GeometryType, GEOMETRIES, GeometryParams } from './types';
-import { 
-  explainGeometryStream, 
-  getApiKey, 
-  setApiKey, 
+import {
+  explainGeometryStream,
+  getApiKey,
+  setApiKey,
   clearApiKey,
   chatWithTutorStream,
   generateWelcomeMessage,
   ChatMessage
 } from './services/deepseekService';
+import { useHighlightStore } from './features/highlight/store';
+import { HoverLegend } from './features/highlight/HoverLegend';
+import { ModelLibraryPanel } from './features/modelLibrary/ModelLibraryPanel';
+import { useModelLibraryStore } from './features/modelLibrary/store';
+import type { ModelEntry } from './features/modelLibrary/store';
+import { CSGWorkshopPanel } from './features/csgWorkshop/CSGWorkshopPanel';
+import { useWorkshopStore } from './features/csgWorkshop/store';
+import { evaluateSteps } from './features/csgWorkshop/model';
 
 const App: React.FC = () => {
   const [showHomePage, setShowHomePage] = useState(true);
@@ -33,6 +41,11 @@ const App: React.FC = () => {
   const [useOrthographic, setUseOrthographic] = useState(false);
   const [showAxonometric, setShowAxonometric] = useState(false);
   const [axonometricType, setAxonometricType] = useState<'isometric' | 'dimetric' | 'cabinet'>('isometric');
+
+  const highlightEnabled = useHighlightStore((s) => s.enabled);
+  const setHighlightEnabled = useHighlightStore((s) => s.setEnabled);
+  const correspondenceLinesEnabled = useHighlightStore((s) => s.correspondenceLinesEnabled);
+  const setCorrespondenceLinesEnabled = useHighlightStore((s) => s.setCorrespondenceLinesEnabled);
   
   const [aiExplanation, setAiExplanation] = useState<string>("");
   const [isLoadingAi, setIsLoadingAi] = useState(false);
@@ -49,8 +62,7 @@ const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(!!getApiKey());
   
   const [customModelUrl, setCustomModelUrl] = useState<string | null>(null);
-  const [customModelName, setCustomModelName] = useState<string>("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [activeModelId, setActiveModelId] = useState<string | null>(null);
   
   const [drawCompleted, setDrawCompleted] = useState(false);
   const [drawnPoints, setDrawnPoints] = useState<[number, number][]>([]);
@@ -74,18 +86,30 @@ const App: React.FC = () => {
 
   const fetchAiExplanationStream = useCallback((shapeName: string, promptContext: string = "") => {
     if (abortControllerRef.current) abortControllerRef.current.abort();
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setIsLoadingAi(true);
     setAiExplanation("");
     shouldAutoScrollRef.current = true;
     let fullText = "";
     explainGeometryStream(shapeName, promptContext,
       (chunk) => {
+        if (controller.signal.aborted) return;
         fullText += chunk;
         setAiExplanation(fullText);
       },
-      () => setIsLoadingAi(false),
-      (error) => { setAiExplanation(error); setIsLoadingAi(false); }
+      () => {
+        if (controller.signal.aborted) return;
+        setIsLoadingAi(false);
+        abortControllerRef.current = null;
+      },
+      (error) => {
+        if (controller.signal.aborted) return;
+        setAiExplanation(error);
+        setIsLoadingAi(false);
+        abortControllerRef.current = null;
+      },
+      controller.signal
     );
   }, []);
 
@@ -123,25 +147,33 @@ const App: React.FC = () => {
     setIsLoadingAi(true);
     setCurrentAssistantMessage("");
     shouldAutoScrollRef.current = true;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     
     let fullResponse = "";
     chatWithTutorStream(
       newMessages,
       geoInfo?.name || "这个物体",
       (chunk) => {
+        if (controller.signal.aborted) return;
         fullResponse += chunk;
         setCurrentAssistantMessage(fullResponse);
       },
       () => {
+        if (controller.signal.aborted) return;
         setChatMessages(prev => [...prev, { role: 'assistant', content: fullResponse }]);
         setCurrentAssistantMessage("");
         setIsLoadingAi(false);
+        abortControllerRef.current = null;
       },
       (error) => {
+        if (controller.signal.aborted) return;
         setChatMessages(prev => [...prev, { role: 'assistant', content: error }]);
         setCurrentAssistantMessage("");
         setIsLoadingAi(false);
-      }
+        abortControllerRef.current = null;
+      },
+      controller.signal
     );
   }, [userInput, isLoadingAi, chatMessages, currentGeometry]);
 
@@ -159,23 +191,48 @@ const App: React.FC = () => {
     fetchAiExplanationStream(geoInfo?.name || "这个物体", prompt);
   };
 
-  const handleStopAi = () => { if (abortControllerRef.current) abortControllerRef.current.abort(); setIsLoadingAi(false); };
-  const handleParamChange = (key: keyof GeometryParams, value: number) => setGeoParams(prev => ({ ...prev, [key]: value }));
+  const handleStopAi = () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setCurrentAssistantMessage("");
+    setIsLoadingAi(false);
+  };
+  const updateLibraryScale = useModelLibraryStore((s) => s.updateScale);
+
+  // CSG 工作台：订阅步骤变化，重算 geometry 注入到 geoParams
+  const csgSteps = useWorkshopStore((s) => s.steps);
+  useEffect(() => {
+    if (currentGeometry !== GeometryType.CSG_WORKSHOP) return;
+    const geo = evaluateSteps(csgSteps);
+    setGeoParams((prev) => ({
+      ...prev,
+      csgGeometry: geo ?? undefined,
+      csgGeometryKey: `${csgSteps.length}-${csgSteps.map(s => s.id + (s.disabled ? 'd' : '')).join(',')}`,
+    }));
+  }, [csgSteps, currentGeometry]);
+
+  const handleParamChange = (key: keyof GeometryParams, value: number) => {
+    setGeoParams(prev => ({ ...prev, [key]: value }));
+    if (key === 'customModelScale' && activeModelId) {
+      updateLibraryScale(activeModelId, value).catch(() => {});
+    }
+  };
   const handleResetParams = () => setGeoParams({ width: 2, height: 2, depth: 2, cutSize: 0.5, customModelScale: 1 });
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      const url = URL.createObjectURL(file);
-      setCustomModelUrl(url); setCustomModelName(file.name);
-      setCurrentGeometry(GeometryType.CUSTOM);
-      setGeoParams(prev => ({ ...prev, customModelUrl: url, customModelScale: 1 }));
-    }
+  const handleSelectLibraryModel = (entry: ModelEntry) => {
+    setCustomModelUrl(entry.objectUrl);
+    setActiveModelId(entry.id);
+    setCurrentGeometry(GeometryType.CUSTOM);
+    setGeoParams(prev => ({
+      ...prev,
+      customModelUrl: entry.objectUrl,
+      customModelScale: entry.scale,
+    }));
   };
 
   const handleClearCustomModel = () => {
-    if (customModelUrl) URL.revokeObjectURL(customModelUrl);
-    setCustomModelUrl(null); setCustomModelName("");
+    setCustomModelUrl(null);
+    setActiveModelId(null);
     setGeoParams(prev => ({ ...prev, customModelUrl: undefined }));
     if (currentGeometry === GeometryType.CUSTOM) setCurrentGeometry(GeometryType.CUBE);
   };
@@ -267,19 +324,11 @@ const App: React.FC = () => {
               {currentGeometry === GeometryType.DRAW && drawCompleted && <button onClick={handleBackToDraw} className="w-full p-2 rounded-lg text-[10px] bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 flex items-center justify-center gap-1">← 返回编辑</button>}
             </div>
             <div className="mt-3 pt-3 border-t border-white/10">
-              <input ref={fileInputRef} type="file" accept=".glb,.gltf" onChange={handleFileUpload} className="hidden" />
-              {customModelUrl ? (
-                <div className={`p-2.5 rounded-lg text-[11px] transition-all border ${currentGeometry === GeometryType.CUSTOM ? 'bg-gradient-to-r from-purple-600/90 to-pink-600/90 border-purple-400/50 text-white shadow-lg shadow-purple-500/30' : 'bg-white/5 border-white/10 text-slate-300'}`}>
-                  <div className="flex items-center justify-between">
-                    <button onClick={() => setCurrentGeometry(GeometryType.CUSTOM)} className="flex items-center gap-1.5 flex-1 text-left"><Upload size={12} /><span className="truncate">{customModelName}</span></button>
-                    <button onClick={handleClearCustomModel} className="p-1 hover:bg-red-500/30 rounded-lg transition-colors" title="移除模型"><Trash2 size={12} /></button>
-                  </div>
-                </div>
-              ) : (
-                <button onClick={() => fileInputRef.current?.click()} className="w-full p-2.5 rounded-lg text-[11px] text-left transition-all border border-dashed border-indigo-500/30 text-slate-400 hover:border-purple-500/50 hover:text-purple-300 hover:bg-purple-500/10 flex items-center gap-1.5 group">
-                  <Upload size={12} className="group-hover:scale-110 transition-transform" />上传模型 (.glb/.gltf)
-                </button>
-              )}
+              <ModelLibraryPanel
+                activeId={currentGeometry === GeometryType.CUSTOM ? activeModelId : null}
+                onSelect={handleSelectLibraryModel}
+                onClear={handleClearCustomModel}
+              />
             </div>
           </section>
 
@@ -319,11 +368,65 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 )}
+                {currentGeometry === GeometryType.CUSTOM_PRISM && (
+                  <div className="pt-2 mt-2 border-t border-white/10">
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-cyan-400 w-10 font-medium">边数</label>
+                      <input type="range" min="3" max="12" step="1" value={geoParams.prismSides ?? 6} onChange={(e) => handleParamChange('prismSides' as keyof GeometryParams, parseInt(e.target.value))} className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-500" />
+                      <span className="text-[10px] text-cyan-300 w-8 text-right font-mono bg-cyan-500/10 px-1.5 py-0.5 rounded">{geoParams.prismSides ?? 6}</span>
+                    </div>
+                  </div>
+                )}
+                {currentGeometry === GeometryType.CUSTOM_STEPPED && (
+                  <div className="pt-2 mt-2 border-t border-white/10 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-cyan-400 w-10 font-medium">层数</label>
+                      <input type="range" min="2" max="5" step="1" value={geoParams.stepCount ?? 3} onChange={(e) => handleParamChange('stepCount' as keyof GeometryParams, parseInt(e.target.value))} className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-500" />
+                      <span className="text-[10px] text-cyan-300 w-8 text-right font-mono bg-cyan-500/10 px-1.5 py-0.5 rounded">{geoParams.stepCount ?? 3}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <label className="text-[10px] text-cyan-400 w-10 font-medium">样式</label>
+                      <button onClick={() => setGeoParams(p => ({ ...p, stepStyle: 'pyramid' }))} className={`flex-1 text-[10px] py-1.5 rounded transition-all ${(geoParams.stepStyle ?? 'pyramid') === 'pyramid' ? 'bg-cyan-500/30 text-cyan-200' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}>金字塔</button>
+                      <button onClick={() => setGeoParams(p => ({ ...p, stepStyle: 'stair' }))} className={`flex-1 text-[10px] py-1.5 rounded transition-all ${geoParams.stepStyle === 'stair' ? 'bg-cyan-500/30 text-cyan-200' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}>阶梯</button>
+                    </div>
+                  </div>
+                )}
+                {currentGeometry === GeometryType.CUSTOM_HOLE_BLOCK && (
+                  <div className="pt-2 mt-2 border-t border-white/10 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-cyan-400 w-10 font-medium">孔数</label>
+                      <input type="range" min="1" max="4" step="1" value={geoParams.holeCount ?? 2} onChange={(e) => handleParamChange('holeCount' as keyof GeometryParams, parseInt(e.target.value))} className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-500" />
+                      <span className="text-[10px] text-cyan-300 w-8 text-right font-mono bg-cyan-500/10 px-1.5 py-0.5 rounded">{geoParams.holeCount ?? 2}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-cyan-400 w-10 font-medium">孔径</label>
+                      <input type="range" min="0.2" max="1.2" step="0.05" value={geoParams.holeDiameter ?? 0.5} onChange={(e) => handleParamChange('holeDiameter' as keyof GeometryParams, parseFloat(e.target.value))} className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-500" />
+                      <span className="text-[10px] text-cyan-300 w-8 text-right font-mono bg-cyan-500/10 px-1.5 py-0.5 rounded">{(geoParams.holeDiameter ?? 0.5).toFixed(2)}</span>
+                    </div>
+                  </div>
+                )}
+                {currentGeometry === GeometryType.CUSTOM_DOUBLE_SLOT && (
+                  <div className="pt-2 mt-2 border-t border-white/10 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-cyan-400 w-10 font-medium">槽宽</label>
+                      <input type="range" min="0.1" max="1.2" step="0.05" value={geoParams.slotWidth ?? 0.4} onChange={(e) => handleParamChange('slotWidth' as keyof GeometryParams, parseFloat(e.target.value))} className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-500" />
+                      <span className="text-[10px] text-cyan-300 w-8 text-right font-mono bg-cyan-500/10 px-1.5 py-0.5 rounded">{(geoParams.slotWidth ?? 0.4).toFixed(2)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-cyan-400 w-10 font-medium">槽深</label>
+                      <input type="range" min="0.1" max="1.8" step="0.05" value={geoParams.slotDepth ?? 1.0} onChange={(e) => handleParamChange('slotDepth' as keyof GeometryParams, parseFloat(e.target.value))} className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-500" />
+                      <span className="text-[10px] text-cyan-300 w-8 text-right font-mono bg-cyan-500/10 px-1.5 py-0.5 rounded">{(geoParams.slotDepth ?? 1.0).toFixed(2)}</span>
+                    </div>
+                  </div>
+                )}
+                {currentGeometry === GeometryType.CSG_WORKSHOP && (
+                  <div className="pt-2 mt-2 border-t border-white/10">
+                    <CSGWorkshopPanel />
+                  </div>
+                )}
               </div>
             </div>
           </section>
-
-          {/* View Controls */}
           <section>
             <h2 className="text-[10px] font-semibold text-indigo-400/80 mb-2.5 flex items-center gap-1.5 uppercase tracking-wider">
               <Eye size={12} className="text-indigo-400" /> 视图控制
@@ -350,6 +453,10 @@ const App: React.FC = () => {
                 <button onClick={() => setShowObject(!showObject)} className={`flex items-center justify-center gap-1.5 p-2.5 rounded-lg text-[11px] transition-all border ${showObject ? 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10' : 'bg-white/5 text-slate-500 border-white/10'}`}>{showObject ? <Eye size={12} /> : <EyeOff size={12} />}{showObject ? '实体' : '隐藏'}</button>
               </div>
               <button onClick={() => setShowProjectors(!showProjectors)} className={`w-full flex items-center justify-center gap-1.5 p-2.5 rounded-lg text-[11px] transition-all border ${showProjectors ? 'bg-gradient-to-r from-rose-600/20 to-pink-600/20 text-rose-300 border-rose-500/30' : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'}`}><PenTool size={12} />{showProjectors ? '投影线 ON' : '投影线 OFF'}</button>
+
+              <button onClick={() => setHighlightEnabled(!highlightEnabled)} className={`w-full flex items-center justify-center gap-1.5 p-2.5 rounded-lg text-[11px] transition-all border ${highlightEnabled ? 'bg-gradient-to-r from-amber-600/20 to-yellow-600/20 text-amber-300 border-amber-500/30' : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'}`}><Sparkles size={12} />{highlightEnabled ? '联动高亮 ON' : '联动高亮 OFF'}</button>
+
+              <button onClick={() => setCorrespondenceLinesEnabled(!correspondenceLinesEnabled)} disabled={!highlightEnabled} className={`w-full flex items-center justify-center gap-1.5 p-2.5 rounded-lg text-[11px] transition-all border disabled:opacity-40 disabled:cursor-not-allowed ${correspondenceLinesEnabled && highlightEnabled ? 'bg-gradient-to-r from-emerald-600/20 to-cyan-600/20 text-emerald-300 border-emerald-500/30' : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'}`}><Layers size={12} />{correspondenceLinesEnabled ? '三等关系辅助线 ON' : '三等关系辅助线 OFF'}</button>
               
               {/* 截平面控制 */}
               <button onClick={() => setShowSectionPlane(!showSectionPlane)} className={`w-full flex items-center justify-between p-2.5 rounded-lg transition-all border ${showSectionPlane ? 'bg-gradient-to-r from-red-600/20 to-orange-600/20 border-red-500/30 text-red-300' : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10 hover:border-red-500/30'}`}>
@@ -469,6 +576,7 @@ const App: React.FC = () => {
             sectionPlaneRotation={sectionPlaneRotation}
           />
         </Canvas>
+        <HoverLegend geometryType={currentGeometry} params={geoParams} />
       </div>
 
       {/* Right Sidebar - AI Assistant */}

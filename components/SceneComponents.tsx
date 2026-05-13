@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { Edges, Text, Line } from '@react-three/drei';
 import { GeometryType, GeometryParams } from '../types';
-import { ADDITION, Evaluator, Brush } from 'three-bvh-csg';
+import { ADDITION, SUBTRACTION, Evaluator, Brush } from 'three-bvh-csg';
 
 // 优化后的配色方案 - 更柔和协调
 export const COLORS = {
@@ -22,9 +22,18 @@ export const COLORS = {
 // --- Geometry Hook ---
 
 export const useGeometryFactory = (type: GeometryType, params: GeometryParams) => {
-  const { width, height, depth, cutSize } = params;
+  const {
+    width, height, depth, cutSize,
+    prismSides, stepCount, stepStyle,
+    holeCount, holeDiameter, slotWidth, slotDepth,
+    csgGeometryKey,
+  } = params;
 
   return useMemo(() => {
+    // CSG 工作台由外部通过 params.csgGeometry 注入，优先返回
+    if (type === GeometryType.CSG_WORKSHOP && params.csgGeometry) {
+      return params.csgGeometry;
+    }
     switch (type) {
       case GeometryType.CUBE:
         return new THREE.BoxGeometry(width, height, depth);
@@ -285,10 +294,94 @@ export const useGeometryFactory = (type: GeometryType, params: GeometryParams) =
         return result.geometry;
       }
 
+      case GeometryType.CUSTOM_PRISM: {
+        const sides = Math.max(3, Math.min(12, prismSides ?? 6));
+        const radius = width / 2;
+        // CylinderGeometry with low segment count = regular prism
+        return new THREE.CylinderGeometry(radius, radius, height, sides);
+      }
+
+      case GeometryType.CUSTOM_STEPPED: {
+        const layers = Math.max(2, Math.min(5, stepCount ?? 3));
+        const style = stepStyle ?? 'pyramid';
+        const layerH = height / layers;
+        const evaluator = new Evaluator();
+        let current: Brush | null = null;
+        for (let i = 0; i < layers; i++) {
+          // pyramid：每层尺寸缩小；stair：每层仅沿 +X 偏移
+          const shrink = style === 'pyramid' ? (1 - i * 0.25) : 1;
+          const lw = Math.max(0.2, width * shrink);
+          const ld = Math.max(0.2, depth * shrink);
+          const box = new THREE.BoxGeometry(lw, layerH, ld);
+          // 每层 Y：底部在 -height/2 + i*layerH
+          const yCenter = -height / 2 + layerH * (i + 0.5);
+          // stair 模式：每层从 -width/2 起，依次朝 +X 滑动 layerShift
+          const xOffset = style === 'stair' ? i * (width / layers) * 0.4 : 0;
+          box.translate(xOffset, yCenter, 0);
+          const brush = new Brush(box);
+          if (!current) {
+            current = brush;
+          } else {
+            const merged = evaluator.evaluate(current, brush, ADDITION);
+            current = merged;
+          }
+        }
+        return current ? current.geometry : new THREE.BoxGeometry(width, height, depth);
+      }
+
+      case GeometryType.CUSTOM_HOLE_BLOCK: {
+        const numHoles = Math.max(1, Math.min(4, holeCount ?? 2));
+        const d = Math.max(0.1, Math.min(Math.min(width, depth) * 0.45, holeDiameter ?? 0.5));
+        const baseBox = new THREE.BoxGeometry(width, height, depth);
+        const evaluator = new Evaluator();
+        let current: Brush = new Brush(baseBox);
+        // 孔沿 Y 轴穿透方块；按 numHoles 在 XZ 平面上均匀排布
+        const positions: [number, number][] = (() => {
+          if (numHoles === 1) return [[0, 0]];
+          if (numHoles === 2) return [[-width / 4, 0], [width / 4, 0]];
+          if (numHoles === 3) return [[-width / 4, -depth / 4], [width / 4, -depth / 4], [0, depth / 4]];
+          return [
+            [-width / 4, -depth / 4], [width / 4, -depth / 4],
+            [-width / 4, depth / 4], [width / 4, depth / 4],
+          ];
+        })();
+        for (const [px, pz] of positions) {
+          const cyl = new THREE.CylinderGeometry(d / 2, d / 2, height * 1.1, 32);
+          cyl.translate(px, 0, pz);
+          const cylBrush = new Brush(cyl);
+          current = evaluator.evaluate(current, cylBrush, SUBTRACTION);
+          cyl.dispose();
+        }
+        return current.geometry;
+      }
+
+      case GeometryType.CUSTOM_DOUBLE_SLOT: {
+        const sw = Math.max(0.1, Math.min(Math.min(width, depth) * 0.4, slotWidth ?? 0.4));
+        const sd = Math.max(0.1, Math.min(height * 0.7, slotDepth ?? height * 0.5));
+        const baseBox = new THREE.BoxGeometry(width, height, depth);
+        const evaluator = new Evaluator();
+        let current: Brush = new Brush(baseBox);
+        // 槽 1：沿 X 轴的长条槽（从顶面往下挖，沿 Z 宽 = sw）
+        const slotX = new THREE.BoxGeometry(width * 1.05, sd, sw);
+        slotX.translate(0, height / 2 - sd / 2, 0);
+        current = evaluator.evaluate(current, new Brush(slotX), SUBTRACTION);
+        slotX.dispose();
+        // 槽 2：沿 Z 轴的长条槽（沿 X 宽 = sw）
+        const slotZ = new THREE.BoxGeometry(sw, sd, depth * 1.05);
+        slotZ.translate(0, height / 2 - sd / 2, 0);
+        current = evaluator.evaluate(current, new Brush(slotZ), SUBTRACTION);
+        slotZ.dispose();
+        return current.geometry;
+      }
+
       default:
         return new THREE.BoxGeometry(width, height, depth);
     }
-  }, [type, width, height, depth, cutSize]);
+  }, [
+    type, width, height, depth, cutSize,
+    prismSides, stepCount, stepStyle, holeCount, holeDiameter, slotWidth, slotDepth,
+    csgGeometryKey, params.csgGeometry,
+  ]);
 };
 
 export const BaseGeometry: React.FC<{ type: GeometryType; params: GeometryParams }> = ({ type, params }) => {
@@ -1388,6 +1481,300 @@ const PyramidProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | '
 };
 
 // 六棱柱专用投影视图
+// ── 台阶块投影 ──────────────────────────────────────────────────────────────
+const CustomSteppedProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, depth, stepCount, stepStyle } = params;
+  const layers = Math.max(2, Math.min(5, stepCount ?? 3));
+  const style = stepStyle ?? 'pyramid';
+  const layerH = height / layers;
+  const OFFSET = 0.05;
+
+  // 每层的 [lw, ld, xOffset, yBottom]
+  const layerData = Array.from({ length: layers }, (_, i) => {
+    const shrink = style === 'pyramid' ? (1 - i * 0.25) : 1;
+    const lw = Math.max(0.2, width * shrink);
+    const ld = Math.max(0.2, depth * shrink);
+    const xOffset = style === 'stair' ? i * (width / layers) * 0.4 : 0;
+    const yBottom = -height / 2 + i * layerH;
+    return { lw, ld, xOffset, yBottom };
+  });
+
+  if (plane === 'V') {
+    // 主视图：从前往后看，每层矩形叠加，取外轮廓
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {layerData.map(({ lw, xOffset, yBottom }, i) => (
+          <Line key={i}
+            points={[
+              [xOffset - lw/2, yBottom, 0], [xOffset + lw/2, yBottom, 0],
+              [xOffset + lw/2, yBottom + layerH, 0], [xOffset - lw/2, yBottom + layerH, 0],
+              [xOffset - lw/2, yBottom, 0],
+            ]}
+            color="#1f2937" lineWidth={2}
+          />
+        ))}
+      </group>
+    );
+  }
+
+  if (plane === 'H') {
+    // 俯视图：从上往下看，只看最顶层（最小/最偏的那层）
+    const top = layerData[layers - 1];
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {layerData.map(({ lw, ld, xOffset }, i) => (
+          <Line key={i}
+            points={[
+              [xOffset - lw/2, -ld/2, 0], [xOffset + lw/2, -ld/2, 0],
+              [xOffset + lw/2,  ld/2, 0], [xOffset - lw/2,  ld/2, 0],
+              [xOffset - lw/2, -ld/2, 0],
+            ]}
+            color="#1f2937" lineWidth={i === layers - 1 ? 2 : 1}
+            opacity={i === layers - 1 ? 1 : 0.5} transparent
+          />
+        ))}
+        {/* suppress unused var warning */ void top}
+      </group>
+    );
+  }
+
+  // W / R：侧视图，每层矩形（深度方向）
+  return (
+    <group position={[0, 0, OFFSET]}>
+      {layerData.map(({ ld, yBottom }, i) => (
+        <Line key={i}
+          points={[
+            [-ld/2, yBottom, 0], [ld/2, yBottom, 0],
+            [ld/2, yBottom + layerH, 0], [-ld/2, yBottom + layerH, 0],
+            [-ld/2, yBottom, 0],
+          ]}
+          color="#1f2937" lineWidth={2}
+        />
+      ))}
+    </group>
+  );
+};
+
+// ── 带孔方块投影 ─────────────────────────────────────────────────────────────
+const CustomHoleBlockProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, depth, holeCount, holeDiameter } = params;
+  const numHoles = Math.max(1, Math.min(4, holeCount ?? 2));
+  const d = Math.max(0.1, Math.min(Math.min(width, depth) * 0.45, holeDiameter ?? 0.5));
+  const w = width / 2;
+  const h = height / 2;
+  const dh = depth / 2;
+  const OFFSET = 0.05;
+
+  const holePositions: [number, number][] = (() => {
+    if (numHoles === 1) return [[0, 0]];
+    if (numHoles === 2) return [[-width / 4, 0], [width / 4, 0]];
+    if (numHoles === 3) return [[-width / 4, -depth / 4], [width / 4, -depth / 4], [0, depth / 4]];
+    return [[-width/4, -depth/4], [width/4, -depth/4], [-width/4, depth/4], [width/4, depth/4]];
+  })();
+
+  const circlePoints = (cx: number, cy: number, r: number, n = 48): [number, number, number][] => {
+    const pts: [number, number, number][] = [];
+    for (let i = 0; i <= n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r, 0]);
+    }
+    return pts;
+  };
+
+  const dashedCircle = (cx: number, cy: number, r: number) => {
+    const geo = new THREE.BufferGeometry().setFromPoints(
+      circlePoints(cx, cy, r).map(p => new THREE.Vector3(...p))
+    );
+    const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.1, gapSize: 0.07 }));
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：矩形外框 + 每个孔的两条竖虚线（孔在 XZ 平面，V 视图看 X 方向）
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line points={[[-w,-h,0],[w,-h,0],[w,h,0],[-w,h,0],[-w,-h,0]]} color="#1f2937" lineWidth={2} />
+        {holePositions.map(([px], i) => (
+          <React.Fragment key={i}>
+            <primitive object={(() => { const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(px-d/2,-h,0),new THREE.Vector3(px-d/2,h,0)]); const l = new THREE.Line(g, new THREE.LineDashedMaterial({color:'#1f2937',dashSize:0.1,gapSize:0.07})); l.computeLineDistances(); return l; })()} />
+            <primitive object={(() => { const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(px+d/2,-h,0),new THREE.Vector3(px+d/2,h,0)]); const l = new THREE.Line(g, new THREE.LineDashedMaterial({color:'#1f2937',dashSize:0.1,gapSize:0.07})); l.computeLineDistances(); return l; })()} />
+          </React.Fragment>
+        ))}
+      </group>
+    );
+  }
+
+  if (plane === 'H') {
+    // 俯视图：矩形外框 + 每个孔的圆（实线，孔穿透可见）
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line points={[[-w,-dh,0],[w,-dh,0],[w,dh,0],[-w,dh,0],[-w,-dh,0]]} color="#1f2937" lineWidth={2} />
+        {holePositions.map(([px, pz], i) => (
+          <Line key={i} points={circlePoints(px, pz, d/2)} color="#1f2937" lineWidth={2} />
+        ))}
+      </group>
+    );
+  }
+
+  // W / R：侧视图：矩形外框 + 孔的两条横虚线（孔在 Z 方向可见）
+  return (
+    <group position={[0, 0, OFFSET]}>
+      <Line points={[[-dh,-h,0],[dh,-h,0],[dh,h,0],[-dh,h,0],[-dh,-h,0]]} color="#1f2937" lineWidth={2} />
+      {holePositions.map(([, pz], i) => (
+        <primitive key={i} object={dashedCircle(pz, 0, d/2)} />
+      ))}
+    </group>
+  );
+};
+
+// ── 双向开槽块投影 ───────────────────────────────────────────────────────────
+const CustomDoubleSlotProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, depth, slotWidth, slotDepth } = params;
+  const sw = Math.max(0.1, Math.min(Math.min(width, depth) * 0.4, slotWidth ?? 0.4));
+  const sd = Math.max(0.1, Math.min(height * 0.7, slotDepth ?? height * 0.5));
+  const w = width / 2;
+  const h = height / 2;
+  const dh = depth / 2;
+  const OFFSET = 0.05;
+  // 槽从顶面往下挖，槽底 Y = h - sd
+  const slotBottomY = h - sd;
+
+  if (plane === 'V') {
+    // 主视图：看到沿 X 方向的槽（宽 sw，深 sd）；沿 Z 方向的槽退化为两条竖线
+    return (
+      <group position={[0, 0, OFFSET]}>
+        {/* 外轮廓（含槽缺口） */}
+        <Line points={[
+          [-w, -h, 0], [w, -h, 0], [w, slotBottomY, 0],
+          [sw/2, slotBottomY, 0], [sw/2, h, 0],
+          [-sw/2, h, 0], [-sw/2, slotBottomY, 0],
+          [-w, slotBottomY, 0], [-w, -h, 0],
+        ]} color="#1f2937" lineWidth={2} />
+        {/* 槽底横线 */}
+        <Line points={[[-w, slotBottomY, 0], [-sw/2, slotBottomY, 0]]} color="#1f2937" lineWidth={2} />
+        <Line points={[[sw/2, slotBottomY, 0], [w, slotBottomY, 0]]} color="#1f2937" lineWidth={2} />
+      </group>
+    );
+  }
+
+  if (plane === 'H') {
+    // 俯视图：看到两个槽的交叉（十字形缺口）
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line points={[
+          [-w, -dh, 0], [w, -dh, 0], [w, dh, 0], [-w, dh, 0], [-w, -dh, 0],
+        ]} color="#1f2937" lineWidth={2} />
+        {/* 十字槽轮廓虚线 */}
+        {[[-sw/2, -dh, 0], [-sw/2, dh, 0]].map((_, i) => null)}
+        <Line points={[[-sw/2, -dh, 0], [-sw/2, dh, 0]]} color="#1f2937" lineWidth={1.5} dashed dashSize={0.1} gapSize={0.07} />
+        <Line points={[[sw/2, -dh, 0], [sw/2, dh, 0]]} color="#1f2937" lineWidth={1.5} dashed dashSize={0.1} gapSize={0.07} />
+        <Line points={[[-w, -sw/2, 0], [w, -sw/2, 0]]} color="#1f2937" lineWidth={1.5} dashed dashSize={0.1} gapSize={0.07} />
+        <Line points={[[-w, sw/2, 0], [w, sw/2, 0]]} color="#1f2937" lineWidth={1.5} dashed dashSize={0.1} gapSize={0.07} />
+      </group>
+    );
+  }
+
+  // W / R：侧视图：看到沿 Z 方向的槽（宽 sw，深 sd）
+  return (
+    <group position={[0, 0, OFFSET]}>
+      <Line points={[
+        [-dh, -h, 0], [dh, -h, 0], [dh, slotBottomY, 0],
+        [sw/2, slotBottomY, 0], [sw/2, h, 0],
+        [-sw/2, h, 0], [-sw/2, slotBottomY, 0],
+        [-dh, slotBottomY, 0], [-dh, -h, 0],
+      ]} color="#1f2937" lineWidth={2} />
+      <Line points={[[-dh, slotBottomY, 0], [-sw/2, slotBottomY, 0]]} color="#1f2937" lineWidth={2} />
+      <Line points={[[sw/2, slotBottomY, 0], [dh, slotBottomY, 0]]} color="#1f2937" lineWidth={2} />
+    </group>
+  );
+};
+
+// ── CSG 工作台投影（用实时 geometry 压扁） ───────────────────────────────────
+const CSGWorkshopProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const geometry = params.csgGeometry;
+  if (!geometry) return null;
+  const OFFSET = 0.05;
+  let scale: [number, number, number] = [1, 1, 1];
+  let position: [number, number, number] = [0, 0, 0];
+  if (plane === 'V') { scale = [1, 1, 0.001]; position = [0, 0, OFFSET]; }
+  else if (plane === 'H') { scale = [1, 0.001, 1]; position = [0, OFFSET, 0]; }
+  else if (plane === 'W') { scale = [0.001, 1, 1]; position = [-OFFSET, 0, 0]; }
+  else { scale = [0.001, 1, 1]; position = [OFFSET, 0, 0]; }
+  return (
+    <group position={position}>
+      <mesh scale={scale} geometry={geometry}>
+        <Edges threshold={15} color="#1f2937" lineWidth={2} />
+        <meshBasicMaterial color="#1f2937" transparent opacity={0.08} />
+      </mesh>
+    </group>
+  );
+};
+
+// 自定义棱柱投影（任意边数）
+const CustomPrismProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
+  const { width, height, prismSides } = params;
+  const sides = Math.max(3, Math.min(12, prismSides ?? 6));
+  const r = width / 2;
+  const h = height / 2;
+  const OFFSET = 0.05;
+
+  // CylinderGeometry 默认第一个顶点在 +X 方向（angle=0），无旋转偏移
+  const pts: [number, number][] = [];
+  for (let i = 0; i < sides; i++) {
+    const angle = (i / sides) * Math.PI * 2;
+    pts.push([r * Math.cos(angle), r * Math.sin(angle)]);
+  }
+
+  // 俯视图：正多边形
+  if (plane === 'H') {
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line
+          points={[...pts.map(p => [p[0], p[1], 0] as [number, number, number]), [pts[0][0], pts[0][1], 0]]}
+          color="#1f2937"
+          lineWidth={2}
+        />
+      </group>
+    );
+  }
+
+  // V / W / R：矩形轮廓（最宽跨度）+ 内部棱虚线
+  const xs = pts.map(p => p[0]);
+  const ys = pts.map(p => p[1]);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+
+  const createDashedLine = (start: [number, number, number], end: [number, number, number]) => {
+    const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...start), new THREE.Vector3(...end)]);
+    const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: '#1f2937', dashSize: 0.12, gapSize: 0.08 }));
+    line.computeLineDistances();
+    return line;
+  };
+
+  if (plane === 'V') {
+    // 主视图：宽 = maxX-minX，高 = height；内部棱投影为竖虚线
+    const innerXs = [...new Set(xs)].filter(x => x > minX + 0.01 && x < maxX - 0.01).sort((a, b) => a - b);
+    return (
+      <group position={[0, 0, OFFSET]}>
+        <Line points={[[minX, -h, 0], [maxX, -h, 0], [maxX, h, 0], [minX, h, 0], [minX, -h, 0]]} color="#1f2937" lineWidth={2} />
+        {innerXs.map((x, i) => <primitive key={i} object={createDashedLine([x, -h, 0], [x, h, 0])} />)}
+      </group>
+    );
+  }
+
+  // W / R：宽 = maxY-minY（depth 方向），高 = height
+  const innerYs = [...new Set(ys)].filter(y => y > minY + 0.01 && y < maxY - 0.01).sort((a, b) => a - b);
+  return (
+    <group position={[0, 0, OFFSET]}>
+      <Line points={[[minY, -h, 0], [maxY, -h, 0], [maxY, h, 0], [minY, h, 0], [minY, -h, 0]]} color="#1f2937" lineWidth={2} />
+      {innerYs.map((y, i) => <primitive key={i} object={createDashedLine([y, -h, 0], [y, h, 0])} />)}
+    </group>
+  );
+};
+
 const HexPrismProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
   const { width, height } = params;
   const r = width / 2;
@@ -1655,7 +2042,11 @@ export const ProjectedView: React.FC<ProjectedViewProps> = ({ type, params, plan
   if (type === GeometryType.HEX_PRISM) {
     return <HexPrismProjection params={params} plane={plane} />;
   }
-  
+
+  if (type === GeometryType.CUSTOM_PRISM) {
+    return <CustomPrismProjection params={params} plane={plane} />;
+  }
+
   // 空心圆柱使用专门的投影视图
   if (type === GeometryType.HOLLOW_CYLINDER) {
     return <HollowCylinderProjection params={params} plane={plane} />;
@@ -1680,7 +2071,23 @@ export const ProjectedView: React.FC<ProjectedViewProps> = ({ type, params, plan
   if (type === GeometryType.SPHERE) {
     return <SphereProjection params={params} plane={plane} />;
   }
-  
+
+  if (type === GeometryType.CUSTOM_STEPPED) {
+    return <CustomSteppedProjection params={params} plane={plane} />;
+  }
+
+  if (type === GeometryType.CUSTOM_HOLE_BLOCK) {
+    return <CustomHoleBlockProjection params={params} plane={plane} />;
+  }
+
+  if (type === GeometryType.CUSTOM_DOUBLE_SLOT) {
+    return <CustomDoubleSlotProjection params={params} plane={plane} />;
+  }
+
+  if (type === GeometryType.CSG_WORKSHOP) {
+    return <CSGWorkshopProjection params={params} plane={plane} />;
+  }
+
   // 默认：使用压扁方式（用于 CUBE 等简单几何体）
   let scale: [number, number, number] = [1, 1, 1];
   let position: [number, number, number] = [0, 0, 0];
@@ -1718,197 +2125,38 @@ interface ProjectorRaysProps {
 }
 
 export const ProjectorRays: React.FC<ProjectorRaysProps> = ({ params, geometryType, explodeGap = 0 }) => {
-    const { width, height, depth, cutSize } = params;
     const boxSize = 5;
-    const w = width / 2;
-    const h = height / 2;
+    const geometry = useGeometryFactory(geometryType, params);
 
-    const getInterestPoints = () => {
-        let points: [number, number, number][] = [
-            [w, h, depth/2], [w, h, -depth/2], [w, -h, depth/2], [w, -h, -depth/2],
-            [-w, h, depth/2], [-w, h, -depth/2], [-w, -h, depth/2], [-w, -h, -depth/2]
-        ];
-
-        if (geometryType === GeometryType.CUT_BLOCK) {
-            const safeCut = Math.min(cutSize, Math.min(width, height) - 0.05);
-            points = [
-                [-w, h, depth/2], [-w, h, -depth/2],
-                [-w, -h, depth/2], [-w, -h, -depth/2],
-                [w, -h, depth/2], [w, -h, -depth/2],
-                [w, h - safeCut, depth/2], [w, h - safeCut, -depth/2],
-                [w - safeCut, h, depth/2], [w - safeCut, h, -depth/2]
-            ];
-        } else if (geometryType === GeometryType.CONE) {
-            const r = width / 2;
-            points = [
-                [0, h, 0],
-                [r, -h, 0], [-r, -h, 0],
-                [0, -h, r], [0, -h, -r]
-            ];
-        } else if (geometryType === GeometryType.CYLINDER) {
-            const r = width / 2;
-            points = [
-                [r, h, 0], [-r, h, 0], [0, h, r], [0, h, -r],
-                [r, -h, 0], [-r, -h, 0], [0, -h, r], [0, -h, -r]
-            ];
-        } else if (geometryType === GeometryType.HEX_PRISM) {
-            // 六棱柱的6个顶点（上下两个面）
-            // Three.js CylinderGeometry 的起始角度有 90度偏移 (Math.PI/2)
-            const r = width / 2;
-            const hexPoints: [number, number, number][] = [];
-            for (let i = 0; i < 6; i++) {
-                const angle = (i * Math.PI) / 3 + Math.PI / 6; // 60度间隔，起始偏移30度
-                const x = r * Math.cos(angle);
-                const z = r * Math.sin(angle);
-                hexPoints.push([x, h, z]);  // 上面
-                hexPoints.push([x, -h, z]); // 下面
-            }
-            points = hexPoints;
-        } else if (geometryType === GeometryType.L_SHAPE) {
-            const thick = Math.min(width, height) * 0.4;
-            points = [
-                [-w, -h, depth/2], [-w, -h, -depth/2],
-                [w, -h, depth/2], [w, -h, -depth/2],
-                [w, -h + thick, depth/2], [w, -h + thick, -depth/2],
-                [-w + thick, -h + thick, depth/2], [-w + thick, -h + thick, -depth/2],
-                [-w + thick, h, depth/2], [-w + thick, h, -depth/2],
-                [-w, h, depth/2], [-w, h, -depth/2],
-            ];
-        } else if (geometryType === GeometryType.SPHERE) {
-            const r = width / 2;
-            points = [
-                [r, 0, 0], [-r, 0, 0],
-                [0, r, 0], [0, -r, 0],
-                [0, 0, r], [0, 0, -r]
-            ];
-        } else if (geometryType === GeometryType.PYRAMID) {
-            const r = width / 2;
-            points = [
-                [0, h, 0], // 顶点
-                [r, -h, 0], [-r, -h, 0],
-                [0, -h, r], [0, -h, -r]
-            ];
-        } else if (geometryType === GeometryType.TORUS) {
-            // TorusGeometry 默认在 XY 平面，环绕 Z 轴
-            const R = width / 2.5; // 主半径
-            const r = width / 6;   // 管半径
-            points = [
-                // X轴方向的外圈和内圈点
-                [R + r, 0, 0], [R - r, 0, 0],
-                [-(R + r), 0, 0], [-(R - r), 0, 0],
-                // Y轴方向的外圈和内圈点
-                [0, R + r, 0], [0, R - r, 0],
-                [0, -(R + r), 0], [0, -(R - r), 0],
-                // 管截面的上下点
-                [R, 0, r], [R, 0, -r],
-                [-R, 0, r], [-R, 0, -r],
-                [0, R, r], [0, R, -r],
-                [0, -R, r], [0, -R, -r]
-            ];
-        } else if (geometryType === GeometryType.WEDGE) {
-            points = [
-                [-w, -h, depth/2], [-w, -h, -depth/2],
-                [w, -h, depth/2], [w, -h, -depth/2],
-                [w, h, depth/2], [w, h, -depth/2]
-            ];
-        } else if (geometryType === GeometryType.T_SHAPE) {
-            const stemW = width * 0.3;
-            const topH = height * 0.3;
-            points = [
-                [-stemW/2, -h, depth/2], [-stemW/2, -h, -depth/2],
-                [stemW/2, -h, depth/2], [stemW/2, -h, -depth/2],
-                [stemW/2, h - topH, depth/2], [stemW/2, h - topH, -depth/2],
-                [w, h - topH, depth/2], [w, h - topH, -depth/2],
-                [w, h, depth/2], [w, h, -depth/2],
-                [-w, h, depth/2], [-w, h, -depth/2],
-                [-w, h - topH, depth/2], [-w, h - topH, -depth/2],
-                [-stemW/2, h - topH, depth/2], [-stemW/2, h - topH, -depth/2]
-            ];
-        } else if (geometryType === GeometryType.CROSS_SHAPE) {
-            const armW = width * 0.3;
-            const armH = height * 0.3;
-            points = [
-                [-armW/2, -h, depth/2], [-armW/2, -h, -depth/2],
-                [armW/2, -h, depth/2], [armW/2, -h, -depth/2],
-                [armW/2, h, depth/2], [armW/2, h, -depth/2],
-                [-armW/2, h, depth/2], [-armW/2, h, -depth/2],
-                [w, -armH/2, depth/2], [w, -armH/2, -depth/2],
-                [w, armH/2, depth/2], [w, armH/2, -depth/2],
-                [-w, -armH/2, depth/2], [-w, -armH/2, -depth/2],
-                [-w, armH/2, depth/2], [-w, armH/2, -depth/2]
-            ];
-        } else if (geometryType === GeometryType.HOLLOW_CYLINDER) {
-            // 几何体居中，Y 从 -h/2 到 h/2
-            const outerR = width / 2;
-            const innerR = width / 4;
-            const hh = height / 2;
-            points = [
-                // 顶面外圈 (Y = h/2)
-                [outerR, hh, 0], [-outerR, hh, 0], [0, hh, outerR], [0, hh, -outerR],
-                // 底面外圈 (Y = -h/2)
-                [outerR, -hh, 0], [-outerR, -hh, 0], [0, -hh, outerR], [0, -hh, -outerR],
-                // 顶面内圈
-                [innerR, hh, 0], [-innerR, hh, 0], [0, hh, innerR], [0, hh, -innerR],
-                // 底面内圈
-                [innerR, -hh, 0], [-innerR, -hh, 0], [0, -hh, innerR], [0, -hh, -innerR]
-            ];
-        } else if (geometryType === GeometryType.STEPPED_BLOCK) {
-            const step = height / 3;
-            points = [
-                [-w, -h, depth/2], [-w, -h, -depth/2],
-                [w, -h, depth/2], [w, -h, -depth/2],
-                [w, -h + step, depth/2], [w, -h + step, -depth/2],
-                [w * 0.5, -h + step, depth/2], [w * 0.5, -h + step, -depth/2],
-                [w * 0.5, -h + step * 2, depth/2], [w * 0.5, -h + step * 2, -depth/2],
-                [0, -h + step * 2, depth/2], [0, -h + step * 2, -depth/2],
-                [0, h, depth/2], [0, h, -depth/2],
-                [-w, h, depth/2], [-w, h, -depth/2]
-            ];
-        } else if (geometryType === GeometryType.CUT_CYLINDER) {
-            const r = width / 2;
-            points = [
-                [r, h, 0], [-r, h, 0], [0, h, r], [0, h, -r],
-                [r, -h, 0], [-r, -h, 0], [0, -h, r], [0, -h, -r]
-            ];
-        } else if (geometryType === GeometryType.SLOT_BLOCK) {
-            const slotW = width * 0.3;
-            const slotD = height * 0.4;
-            points = [
-                [-w, -h, depth/2], [-w, -h, -depth/2],
-                [w, -h, depth/2], [w, -h, -depth/2],
-                [w, h, depth/2], [w, h, -depth/2],
-                [slotW/2, h, depth/2], [slotW/2, h, -depth/2],
-                [slotW/2, h - slotD, depth/2], [slotW/2, h - slotD, -depth/2],
-                [-slotW/2, h - slotD, depth/2], [-slotW/2, h - slotD, -depth/2],
-                [-slotW/2, h, depth/2], [-slotW/2, h, -depth/2],
-                [-w, h, depth/2], [-w, h, -depth/2]
-            ];
-        } else if (geometryType === GeometryType.INTERSECTING_PRISMS) {
-            // 两个正交相贯的三棱柱 - 与几何体定义保持一致
-            const prismRadius = Math.min(width, height) * 0.4;
-            const prismLength = depth * 1.8;
-            const halfLen = prismLength / 2;
-            const r = prismRadius;
-            const topY = r;           // 三角形顶点Y
-            const botY = -r * 0.5;    // 三角形底边Y
-            const triW = r * 0.866;   // 三角形半宽
-            
-            points = [
-                // 第一个三棱柱（沿X轴）的关键点
-                [halfLen, topY, 0], [-halfLen, topY, 0],           // 顶棱两端
-                [halfLen, botY, -triW], [-halfLen, botY, -triW],   // 后底棱两端
-                [halfLen, botY, triW], [-halfLen, botY, triW],     // 前底棱两端
-                // 第二个三棱柱（沿Z轴）的关键点
-                [0, topY, halfLen], [0, topY, -halfLen],           // 顶棱两端
-                [-triW, botY, halfLen], [-triW, botY, -halfLen],   // 左底棱两端
-                [triW, botY, halfLen], [triW, botY, -halfLen],     // 右底棱两端
-            ];
-        }
-
-        return points;
-    }
-
-    const corners = getInterestPoints();
+    const corners = React.useMemo(() => {
+      geometry.computeBoundingBox();
+      const box = geometry.boundingBox;
+      if (!box) return [] as [number, number, number][];
+      const { min, max } = box;
+      const raw: [number, number, number][] = [
+        [max.x, max.y, max.z],
+        [max.x, max.y, min.z],
+        [max.x, min.y, max.z],
+        [max.x, min.y, min.z],
+        [min.x, max.y, max.z],
+        [min.x, max.y, min.z],
+        [min.x, min.y, max.z],
+        [min.x, min.y, min.z],
+        [max.x, 0, 0],
+        [min.x, 0, 0],
+        [0, max.y, 0],
+        [0, min.y, 0],
+        [0, 0, max.z],
+        [0, 0, min.z],
+      ];
+      const seen = new Set<string>();
+      return raw.filter(([x, y, z]) => {
+        const key = `${x.toFixed(4)}:${y.toFixed(4)}:${z.toFixed(4)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }, [geometry]);
 
     const createProjector = (start: [number, number, number], end: [number, number, number], key: string) => {
         const dist = Math.sqrt(
@@ -1943,10 +2191,11 @@ export const ProjectorRays: React.FC<ProjectorRaysProps> = ({ params, geometryTy
     const lines: React.ReactElement[] = [];
     
     // 计算各投影面的实际位置（考虑炸开间距）
-    const vPlaneZ = -boxSize/2 - explodeGap;  // V面向后炸开
-    const hPlaneY = -boxSize/2 - explodeGap;  // H面向下炸开
-    const wPlaneX = boxSize/2 + explodeGap;   // W面向右炸开
-    const rPlaneX = -boxSize/2 - explodeGap;  // R面向左炸开
+    // 折叠态下四个投影面的实际世界位置要和 GlassBoxScene 里的平面中心对齐
+    const vPlaneZ = -boxSize / 2 - explodeGap;   // V面后墙
+    const hPlaneY = -boxSize - explodeGap;       // H面底墙
+    const wPlaneX = boxSize + explodeGap;        // W面右墙（左视图）
+    const rPlaneX = -boxSize - explodeGap;       // R面左墙（右视图）
     
     corners.forEach((corner, i) => {
         const [x, y, z] = corner;

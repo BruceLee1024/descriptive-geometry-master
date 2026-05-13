@@ -78,7 +78,8 @@ export const chatWithTutorStream = async (
   currentShape: string,
   onChunk: (chunk: string) => void,
   onComplete: () => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> => {
   if (!apiKey) {
     onError("请先在设置中输入 DeepSeek API Key。");
@@ -100,6 +101,7 @@ export const chatWithTutorStream = async (
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
+      signal,
       body: JSON.stringify({
         model: "deepseek-chat",
         messages: fullMessages,
@@ -154,6 +156,9 @@ export const chatWithTutorStream = async (
 
     onComplete();
   } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return;
+    }
     console.error("DeepSeek API Error:", error);
     onError("AI 老师暂时掉线了，请稍后再试。");
   }
@@ -175,7 +180,8 @@ export const explainGeometryStream = async (
   promptContext: string = "",
   onChunk: (chunk: string) => void,
   onComplete: () => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> => {
   if (!apiKey) {
     onError("请先在设置中输入 DeepSeek API Key。");
@@ -191,6 +197,7 @@ export const explainGeometryStream = async (
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
+      signal,
       body: JSON.stringify({
         model: "deepseek-chat",
         messages: [{ role: "user", content: prompt }],
@@ -245,6 +252,9 @@ export const explainGeometryStream = async (
 
     onComplete();
   } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return;
+    }
     console.error("DeepSeek API Error:", error);
     onError("AI 老师暂时掉线了，请稍后再试。");
   }

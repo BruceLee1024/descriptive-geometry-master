@@ -144,6 +144,53 @@ export const SketchBuilder: React.FC<SketchBuilderProps> = ({
     setSelectedVertex(null);
   }, []);
 
+  // 预设形状：矩形
+  const loadPresetRectangle = useCallback(() => {
+    const w = 2.0;
+    const h = 1.5;
+    const rect: [number, number][] = [
+      [-w / 2, -h / 2],
+      [ w / 2, -h / 2],
+      [ w / 2,  h / 2],
+      [-w / 2,  h / 2],
+    ];
+    setPoints(rect);
+    setIsClosed(true);
+    setIsDrawing(false);
+    setCurrentPoint(null);
+    setMode('push');
+  }, []);
+
+  // 预设形状：圆（32 段近似）
+  const loadPresetCircle = useCallback((segments = 32) => {
+    const r = 1.0;
+    const pts: [number, number][] = [];
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      pts.push([Math.round(Math.cos(a) * r * 4) / 4, Math.round(Math.sin(a) * r * 4) / 4]);
+    }
+    setPoints(pts);
+    setIsClosed(true);
+    setIsDrawing(false);
+    setCurrentPoint(null);
+    setMode('push');
+  }, []);
+
+  // 预设形状：正多边形
+  const loadPresetPolygon = useCallback((sides: number) => {
+    const r = 1.0;
+    const pts: [number, number][] = [];
+    for (let i = 0; i < sides; i++) {
+      const a = (i / sides) * Math.PI * 2 + Math.PI / 2; // 顶点朝上
+      pts.push([Math.round(Math.cos(a) * r * 4) / 4, Math.round(Math.sin(a) * r * 4) / 4]);
+    }
+    setPoints(pts);
+    setIsClosed(true);
+    setIsDrawing(false);
+    setCurrentPoint(null);
+    setMode('push');
+  }, []);
+
   // 撤销
   const handleUndo = useCallback(() => {
     if (isClosed) {
@@ -348,6 +395,22 @@ export const SketchBuilder: React.FC<SketchBuilderProps> = ({
               清除
             </button>
           </div>
+
+          {/* 预设形状：跳过手绘，直接载入常用轮廓 */}
+          {!isClosed && points.length === 0 && (
+            <div className="border-t border-slate-700 pt-2 space-y-1.5">
+              <div className="text-[10px] text-slate-400 font-semibold">快速形状</div>
+              <div className="grid grid-cols-3 gap-1">
+                <button onClick={loadPresetRectangle} className="py-1.5 bg-indigo-900/50 hover:bg-indigo-800 text-indigo-200 rounded text-[10px]">矩形</button>
+                <button onClick={() => loadPresetCircle(32)} className="py-1.5 bg-indigo-900/50 hover:bg-indigo-800 text-indigo-200 rounded text-[10px]">圆</button>
+                <button onClick={() => loadPresetPolygon(3)} className="py-1.5 bg-indigo-900/50 hover:bg-indigo-800 text-indigo-200 rounded text-[10px]">三角</button>
+                <button onClick={() => loadPresetPolygon(5)} className="py-1.5 bg-indigo-900/50 hover:bg-indigo-800 text-indigo-200 rounded text-[10px]">五边</button>
+                <button onClick={() => loadPresetPolygon(6)} className="py-1.5 bg-indigo-900/50 hover:bg-indigo-800 text-indigo-200 rounded text-[10px]">六边</button>
+                <button onClick={() => loadPresetPolygon(8)} className="py-1.5 bg-indigo-900/50 hover:bg-indigo-800 text-indigo-200 rounded text-[10px]">八边</button>
+              </div>
+              <div className="text-[9px] text-slate-500">载入后可切换到推拉模式调整高度</div>
+            </div>
+          )}
 
           {/* 完成按钮 */}
           {isClosed && geometry && (

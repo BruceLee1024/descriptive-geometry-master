@@ -8,6 +8,10 @@ import { MainObject, ProjectedView, COLORS, PlaneLabel, ProjectorRays, useGeomet
 import { SketchBuilder } from './SketchBuilder';
 import { SectionPlane, SectionLine2D } from './SectionPlane';
 import { SectionResult } from '../utils/sectionPlane';
+import { HighlightLayer } from '../features/highlight/HighlightLayer';
+import { CorrespondenceLines } from '../features/highlight/CorrespondenceLines';
+import { useWorkshopStore } from '../features/csgWorkshop/store';
+import { buildStepGeometry } from '../features/csgWorkshop/model';
 
 interface GlassBoxSceneProps {
   geometryType: GeometryType;
@@ -267,6 +271,28 @@ const createDrawnGeometry = (points: [number, number][], depth: number): THREE.B
   }
 };
 
+const SelectedCSGStepPreview: React.FC = () => {
+  const selectedStep = useWorkshopStore((s) => s.steps.find((step) => step.id === s.selectedId) ?? null);
+
+  const geometry = React.useMemo(() => {
+    if (!selectedStep || selectedStep.disabled) return null;
+    return buildStepGeometry(selectedStep);
+  }, [selectedStep]);
+
+  React.useEffect(() => {
+    return () => geometry?.dispose();
+  }, [geometry]);
+
+  if (!geometry) return null;
+
+  return (
+    <mesh geometry={geometry} renderOrder={20}>
+      <meshBasicMaterial color="#22d3ee" transparent opacity={0.24} depthWrite={false} />
+      <Edges color="#67e8f9" threshold={12} lineWidth={2} />
+    </mesh>
+  );
+};
+
 export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({ 
     geometryType, 
     geometryParams, 
@@ -413,6 +439,10 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
           ) : (
             <MainObject type={geometryType} params={geometryParams} />
           )}
+          {geometryType === GeometryType.CSG_WORKSHOP && <SelectedCSGStepPreview />}
+          {!isCustom && !isDrawCompleted && (
+            <HighlightLayer geometryType={geometryType} params={geometryParams} plane="3d" />
+          )}
           {showProjectors && !isUnfolded && !isCustom && !isDrawCompleted && (
               <ProjectorRays params={geometryParams} geometryType={geometryType} explodeGap={EXPLODE_GAP} />
           )}
@@ -449,6 +479,9 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
         </mesh>
         <PlaneLabel text="V (主视图)" position={[0, BOX_SIZE / 2 + 0.3, 0.1]} />
         {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="V" />}
+        {!isCustom && (
+          <HighlightLayer geometryType={geometryType} params={geometryParams} plane="V" />
+        )}
         {showSectionPlane && sectionResult && (
           <SectionLine2D sectionResult={sectionResult} plane="V" />
         )}
@@ -466,6 +499,9 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
                 <PlaneLabel text="H (俯视图)" position={[0, -BOX_SIZE / 2 + 0.3, 0.1]} />
                 
                 {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="H" />}
+                {!isCustom && (
+                  <HighlightLayer geometryType={geometryType} params={geometryParams} plane="H" />
+                )}
                 {showSectionPlane && sectionResult && (
                   <SectionLine2D sectionResult={sectionResult} plane="H" />
                 )}
@@ -485,6 +521,9 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
               <PlaneLabel text="W (左视图)" position={[0, BOX_SIZE / 2 + 0.3, 0.1]} />
 
               {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="W" />}
+              {!isCustom && (
+                <HighlightLayer geometryType={geometryType} params={geometryParams} plane="W" />
+              )}
               {showSectionPlane && sectionResult && (
                 <SectionLine2D sectionResult={sectionResult} plane="W" />
               )}
@@ -504,12 +543,24 @@ export const GlassBoxScene: React.FC<GlassBoxSceneProps> = ({
                 <PlaneLabel text="R (右视图)" position={[0, BOX_SIZE / 2 + 0.3, 0.1]} />
 
                 {!isCustom && <ProjectedView type={geometryType} params={geometryParams} plane="R" />}
+                {!isCustom && (
+                  <HighlightLayer geometryType={geometryType} params={geometryParams} plane="R" />
+                )}
                 {showSectionPlane && sectionResult && (
                   <SectionLine2D sectionResult={sectionResult} plane="R" />
                 )}
              </group>
           </group>
       </group>}
+
+      {/* 三等关系辅助线（仅折叠状态下有意义） */}
+      {(!isDraw || isDrawCompleted) && !isCustom && (
+        <CorrespondenceLines
+          geometryType={geometryType}
+          params={geometryParams}
+          visible={!isUnfolded}
+        />
+      )}
 
       {/* 展开时显示网格背景 */}
       {isUnfolded && (

@@ -152,7 +152,7 @@ export const ModelLibraryPanel: React.FC<ModelLibraryPanelProps> = ({
                       >
                         <div className="truncate font-medium">{entry.name}</div>
                         <div className="truncate text-[9px] opacity-60">
-                          {(entry.size / 1024).toFixed(0)} KB
+                          {(entry.size / 1024).toFixed(0)} KB · {entry.source === 'csg' ? 'CSG 可编辑' : entry.source === 'drawn' ? '绘制模型' : '导入模型'}
                         </div>
                       </button>
                     )}

@@ -286,10 +286,15 @@ const SelectedCSGStepPreview: React.FC = () => {
   if (!geometry) return null;
 
   return (
-    <mesh geometry={geometry} renderOrder={20}>
-      <meshBasicMaterial color="#22d3ee" transparent opacity={0.24} depthWrite={false} />
-      <Edges color="#67e8f9" threshold={12} lineWidth={2} />
-    </mesh>
+    <group renderOrder={20}>
+      <mesh geometry={geometry}>
+        <meshBasicMaterial color="#22d3ee" transparent opacity={0.18} depthWrite={false} />
+        <Edges color="#67e8f9" threshold={12} lineWidth={2} />
+      </mesh>
+      <mesh geometry={geometry} scale={1.002}>
+        <meshBasicMaterial color="#22d3ee" transparent opacity={0.06} depthWrite={false} />
+      </mesh>
+    </group>
   );
 };
 

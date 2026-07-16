@@ -17,6 +17,8 @@ export interface ModelEntry {
   size: number;
   createdAt: number;
   scale: number;
+  source?: 'imported' | 'drawn' | 'csg';
+  csgProjectId?: string;
   objectUrl: string;       // 指向 model blob
   thumbnailUrl?: string;   // 指向 thumbnail blob
 }
@@ -26,6 +28,7 @@ interface ModelLibraryState {
   entries: ModelEntry[];
   load: () => Promise<void>;
   addFromFile: (file: File) => Promise<ModelEntry>;
+  addFromBlob: (blob: Blob, meta: { name: string; fileName: string; mimeType: string; source?: ModelEntry['source']; csgProjectId?: string }) => Promise<ModelEntry>;
   remove: (id: string) => Promise<void>;
   rename: (id: string, name: string) => Promise<void>;
   updateScale: (id: string, scale: number) => Promise<void>;
@@ -39,6 +42,8 @@ function toEntry(m: StoredModel): ModelEntry {
     size: m.size,
     createdAt: m.createdAt,
     scale: m.scale,
+    source: m.source ?? 'imported',
+    csgProjectId: m.csgProjectId,
     objectUrl: URL.createObjectURL(m.blob),
     thumbnailUrl: m.thumbnail ? URL.createObjectURL(m.thumbnail) : undefined,
   };
@@ -77,7 +82,31 @@ export const useModelLibraryStore = create<ModelLibraryState>((set, get) => ({
       size: file.size,
       createdAt,
       scale: 1,
+      source: 'imported',
       blob: file,
+      thumbnail,
+    };
+    await dbSave(stored);
+    const entry = toEntry(stored);
+    set((s) => ({ entries: [entry, ...s.entries] }));
+    return entry;
+  },
+
+  addFromBlob: async (blob, meta) => {
+    const id = genId();
+    const createdAt = Date.now();
+    const thumbnail = await generateThumbnail(blob).catch(() => undefined);
+    const stored: StoredModel = {
+      id,
+      name: meta.name,
+      fileName: meta.fileName,
+      mimeType: meta.mimeType,
+      size: blob.size,
+      createdAt,
+      scale: 1,
+      source: meta.source,
+      csgProjectId: meta.csgProjectId,
+      blob,
       thumbnail,
     };
     await dbSave(stored);

@@ -2,7 +2,7 @@
 // 只做这一个项目需要的事，不引第三方库
 
 const DB_NAME = 'descriptive-geometry-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_MODELS = 'models';
 
 export interface StoredModel {
@@ -13,6 +13,8 @@ export interface StoredModel {
   size: number;          // bytes
   createdAt: number;     // ms
   scale: number;
+  source?: 'imported' | 'drawn' | 'csg';
+  csgProjectId?: string;
   blob: Blob;
   thumbnail?: Blob;      // 128×128 PNG
 }
@@ -28,6 +30,11 @@ function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_MODELS)) {
         const store = db.createObjectStore(STORE_MODELS, { keyPath: 'id' });
         store.createIndex('createdAt', 'createdAt');
+      } else {
+        const store = req.transaction?.objectStore(STORE_MODELS);
+        if (store && !store.indexNames.contains('createdAt')) {
+          store.createIndex('createdAt', 'createdAt');
+        }
       }
     };
     req.onsuccess = () => resolve(req.result);

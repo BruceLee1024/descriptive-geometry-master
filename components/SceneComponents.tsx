@@ -19,6 +19,66 @@ export const COLORS = {
   PROJECTION_FILL: 'rgba(0,0,0,0.05)',
 };
 
+type ProjectionPlane = 'V' | 'H' | 'W' | 'R';
+
+function projectPointToViewPlane(point: THREE.Vector3, plane: ProjectionPlane): [number, number] {
+  switch (plane) {
+    case 'V':
+      return [point.x, point.y];
+    case 'H':
+      return [point.x, -point.z];
+    case 'W':
+      return [point.z, point.y];
+    case 'R':
+      return [-point.z, point.y];
+  }
+}
+
+function buildProjectedEdgeGeometry(
+  geometry: THREE.BufferGeometry,
+  plane: ProjectionPlane,
+  offset = 0.06
+): THREE.BufferGeometry {
+  const edges = new THREE.EdgesGeometry(geometry, 15);
+  const position = edges.getAttribute('position') as THREE.BufferAttribute;
+  const projected = new Float32Array(position.count * 3);
+  const point = new THREE.Vector3();
+
+  for (let i = 0; i < position.count; i++) {
+    point.fromBufferAttribute(position, i);
+    const [x, y] = projectPointToViewPlane(point, plane);
+    projected[i * 3] = x;
+    projected[i * 3 + 1] = y;
+    projected[i * 3 + 2] = offset;
+  }
+
+  edges.dispose();
+  const projectedGeometry = new THREE.BufferGeometry();
+  projectedGeometry.setAttribute('position', new THREE.BufferAttribute(projected, 3));
+  return projectedGeometry;
+}
+
+const ProjectedGeometryEdges: React.FC<{
+  geometry: THREE.BufferGeometry;
+  plane: ProjectionPlane;
+  color?: string;
+}> = ({ geometry, plane, color = '#1f2937' }) => {
+  const projectedGeometry = useMemo(
+    () => buildProjectedEdgeGeometry(geometry, plane),
+    [geometry, plane]
+  );
+
+  React.useEffect(() => {
+    return () => projectedGeometry.dispose();
+  }, [projectedGeometry]);
+
+  return (
+    <lineSegments geometry={projectedGeometry}>
+      <lineBasicMaterial color={color} />
+    </lineSegments>
+  );
+};
+
 // --- Geometry Hook ---
 
 export const useGeometryFactory = (type: GeometryType, params: GeometryParams) => {
@@ -1694,19 +1754,9 @@ const CustomDoubleSlotProjection: React.FC<{ params: GeometryParams; plane: 'V' 
 const CSGWorkshopProjection: React.FC<{ params: GeometryParams; plane: 'V' | 'H' | 'W' | 'R' }> = ({ params, plane }) => {
   const geometry = params.csgGeometry;
   if (!geometry) return null;
-  const OFFSET = 0.05;
-  let scale: [number, number, number] = [1, 1, 1];
-  let position: [number, number, number] = [0, 0, 0];
-  if (plane === 'V') { scale = [1, 1, 0.001]; position = [0, 0, OFFSET]; }
-  else if (plane === 'H') { scale = [1, 0.001, 1]; position = [0, OFFSET, 0]; }
-  else if (plane === 'W') { scale = [0.001, 1, 1]; position = [-OFFSET, 0, 0]; }
-  else { scale = [0.001, 1, 1]; position = [OFFSET, 0, 0]; }
   return (
-    <group position={position}>
-      <mesh scale={scale} geometry={geometry}>
-        <Edges threshold={15} color="#1f2937" lineWidth={2} />
-        <meshBasicMaterial color="#1f2937" transparent opacity={0.08} />
-      </mesh>
+    <group>
+      <ProjectedGeometryEdges geometry={geometry} plane={plane} />
     </group>
   );
 };
@@ -2088,31 +2138,9 @@ export const ProjectedView: React.FC<ProjectedViewProps> = ({ type, params, plan
     return <CSGWorkshopProjection params={params} plane={plane} />;
   }
 
-  // 默认：使用压扁方式（用于 CUBE 等简单几何体）
-  let scale: [number, number, number] = [1, 1, 1];
-  let position: [number, number, number] = [0, 0, 0];
-  const OFFSET = 0.05;
-
-  if (plane === 'V') {
-    scale = [1, 1, 0.001];
-    position = [0, 0, OFFSET]; 
-  } else if (plane === 'H') {
-    scale = [1, 0.001, 1];
-    position = [0, OFFSET, 0];
-  } else if (plane === 'W') {
-    scale = [0.001, 1, 1];
-    position = [-OFFSET, 0, 0]; 
-  } else if (plane === 'R') {
-    scale = [0.001, 1, 1];
-    position = [OFFSET, 0, 0]; 
-  }
-
   return (
-    <group position={position}>
-      <mesh scale={scale} geometry={geometry}>
-        <Edges threshold={15} color="#1f2937" lineWidth={2} />
-        <meshBasicMaterial color="#1f2937" transparent opacity={0.08} />
-      </mesh>
+    <group>
+      <ProjectedGeometryEdges geometry={geometry} plane={plane} />
     </group>
   );
 };
@@ -2193,9 +2221,9 @@ export const ProjectorRays: React.FC<ProjectorRaysProps> = ({ params, geometryTy
     // 计算各投影面的实际位置（考虑炸开间距）
     // 折叠态下四个投影面的实际世界位置要和 GlassBoxScene 里的平面中心对齐
     const vPlaneZ = -boxSize / 2 - explodeGap;   // V面后墙
-    const hPlaneY = -boxSize - explodeGap;       // H面底墙
-    const wPlaneX = boxSize + explodeGap;        // W面右墙（左视图）
-    const rPlaneX = -boxSize - explodeGap;       // R面左墙（右视图）
+    const hPlaneY = -boxSize / 2 - explodeGap;   // H面底墙
+    const wPlaneX = boxSize / 2 + explodeGap;    // W面右墙（左视图）
+    const rPlaneX = -boxSize / 2 - explodeGap;   // R面左墙（右视图）
     
     corners.forEach((corner, i) => {
         const [x, y, z] = corner;

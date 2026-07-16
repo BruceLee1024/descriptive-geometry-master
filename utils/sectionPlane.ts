@@ -777,13 +777,9 @@ export function projectSectionToView(
         // 在局部坐标系中：x不变，y对应-z
         return [p.x, -p.z];
       case 'W':  // 左视图：从右往左看，ZY平面
-        // W面有rotation={[0, -Math.PI/2, 0]}，原X轴->Z轴，原Z轴->-X轴
-        // 在局部坐标系中：x对应-z，y不变
-        return [-p.z, p.y];
-      case 'R':  // 右视图：从左往右看，ZY平面
-        // R面有rotation={[0, Math.PI/2, 0]}，原X轴->-Z轴，原Z轴->X轴
-        // 在局部坐标系中：x对应z，y不变
         return [p.z, p.y];
+      case 'R':  // 右视图：从左往右看，ZY平面
+        return [-p.z, p.y];
       default:
         return [p.x, p.y];
     }

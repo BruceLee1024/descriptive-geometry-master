@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import ReactMarkdown from 'react-markdown';
 import { 
@@ -26,7 +26,9 @@ import { useModelLibraryStore } from './features/modelLibrary/store';
 import type { ModelEntry } from './features/modelLibrary/store';
 import { CSGWorkshopPanel } from './features/csgWorkshop/CSGWorkshopPanel';
 import { useWorkshopStore } from './features/csgWorkshop/store';
-import { evaluateSteps } from './features/csgWorkshop/model';
+import { evaluateSteps, summarizeSteps, buildProjectFromGeometry } from './features/csgWorkshop/model';
+import { exportGeometryAsGLB } from './features/csgWorkshop/exporters';
+import * as THREE from 'three';
 
 const App: React.FC = () => {
   const [showHomePage, setShowHomePage] = useState(true);
@@ -46,6 +48,19 @@ const App: React.FC = () => {
   const setHighlightEnabled = useHighlightStore((s) => s.setEnabled);
   const correspondenceLinesEnabled = useHighlightStore((s) => s.correspondenceLinesEnabled);
   const setCorrespondenceLinesEnabled = useHighlightStore((s) => s.setCorrespondenceLinesEnabled);
+  const csgSteps = useWorkshopStore((s) => s.steps);
+  const saveCsgProject = useWorkshopStore((s) => s.saveProject);
+  const openCsgProject = useWorkshopStore((s) => s.openProject);
+  const csgSummary = currentGeometry === GeometryType.CSG_WORKSHOP ? summarizeSteps(csgSteps) : '';
+  const csgProjectSignature = useMemo(() => JSON.stringify(csgSteps.map((step) => ({
+    id: step.id,
+    op: step.op,
+    disabled: !!step.disabled,
+    primitive: step.primitive,
+    position: step.position,
+    rotation: step.rotation,
+    scale: step.scale,
+  }))), [csgSteps]);
   
   const [aiExplanation, setAiExplanation] = useState<string>("");
   const [isLoadingAi, setIsLoadingAi] = useState(false);
@@ -153,7 +168,7 @@ const App: React.FC = () => {
     let fullResponse = "";
     chatWithTutorStream(
       newMessages,
-      geoInfo?.name || "这个物体",
+      `${geoInfo?.name || "这个物体"}${csgSummary ? `\n${csgSummary}` : ''}`,
       (chunk) => {
         if (controller.signal.aborted) return;
         fullResponse += chunk;
@@ -175,7 +190,7 @@ const App: React.FC = () => {
       },
       controller.signal
     );
-  }, [userInput, isLoadingAi, chatMessages, currentGeometry]);
+  }, [userInput, isLoadingAi, chatMessages, currentGeometry, csgSummary]);
 
   // 处理回车发送
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -187,7 +202,7 @@ const App: React.FC = () => {
 
   const handleAskAI = () => {
     const geoInfo = GEOMETRIES.find(g => g.id === currentGeometry);
-    const prompt = `目前的几何体参数为：宽${geoParams.width}, 高${geoParams.height}, 深${geoParams.depth}。请解释一下它的三视图长什么样？重点解释一下"长对正、高平齐、宽相等"在这个物体上是如何体现的？`;
+    const prompt = `目前的几何体参数为：宽${geoParams.width}, 高${geoParams.height}, 深${geoParams.depth}。${csgSummary ? `${csgSummary}。` : ''}请解释一下它的三视图长什么样？重点解释一下"长对正、高平齐、宽相等"在这个物体上是如何体现的？`;
     fetchAiExplanationStream(geoInfo?.name || "这个物体", prompt);
   };
 
@@ -198,18 +213,19 @@ const App: React.FC = () => {
     setIsLoadingAi(false);
   };
   const updateLibraryScale = useModelLibraryStore((s) => s.updateScale);
+  const addModelFromBlob = useModelLibraryStore((s) => s.addFromBlob);
 
   // CSG 工作台：订阅步骤变化，重算 geometry 注入到 geoParams
-  const csgSteps = useWorkshopStore((s) => s.steps);
   useEffect(() => {
-    if (currentGeometry !== GeometryType.CSG_WORKSHOP) return;
+    if (currentGeometry !== GeometryType.CSG_WORKSHOP || csgSteps.length === 0) return;
+    saveCsgProject();
     const geo = evaluateSteps(csgSteps);
     setGeoParams((prev) => ({
       ...prev,
       csgGeometry: geo ?? undefined,
       csgGeometryKey: `${csgSteps.length}-${csgSteps.map(s => s.id + (s.disabled ? 'd' : '')).join(',')}`,
     }));
-  }, [csgSteps, currentGeometry]);
+  }, [csgProjectSignature, currentGeometry, csgSteps.length, saveCsgProject]);
 
   const handleParamChange = (key: keyof GeometryParams, value: number) => {
     setGeoParams(prev => ({ ...prev, [key]: value }));
@@ -220,6 +236,24 @@ const App: React.FC = () => {
   const handleResetParams = () => setGeoParams({ width: 2, height: 2, depth: 2, cutSize: 0.5, customModelScale: 1 });
 
   const handleSelectLibraryModel = (entry: ModelEntry) => {
+    if (entry.source === 'csg' && entry.csgProjectId) {
+      openCsgProject(entry.csgProjectId);
+      setCurrentGeometry(GeometryType.CSG_WORKSHOP);
+      setActiveModelId(null);
+      setCustomModelUrl(null);
+      return;
+    }
+    if (entry.source === 'drawn') {
+      setCustomModelUrl(entry.objectUrl);
+      setActiveModelId(entry.id);
+      setCurrentGeometry(GeometryType.CUSTOM);
+      setGeoParams(prev => ({
+        ...prev,
+        customModelUrl: entry.objectUrl,
+        customModelScale: entry.scale,
+      }));
+      return;
+    }
     setCustomModelUrl(entry.objectUrl);
     setActiveModelId(entry.id);
     setCurrentGeometry(GeometryType.CUSTOM);
@@ -242,6 +276,38 @@ const App: React.FC = () => {
     setGeoParams(prev => ({ ...prev, drawPoints: points, drawDepth: depth }));
   };
   const handleBackToDraw = () => setDrawCompleted(false);
+  const handleSaveDrawnToLibrary = async () => {
+    if (!drawCompleted || drawnPoints.length < 3) return;
+    const shape = new THREE.Shape();
+    shape.moveTo(drawnPoints[0][0], drawnPoints[0][1]);
+    drawnPoints.slice(1).forEach(([x, y]) => shape.lineTo(x, y));
+    shape.closePath();
+    const geometry = new THREE.ExtrudeGeometry(shape, { depth: drawnDepth, bevelEnabled: false });
+    geometry.rotateX(-Math.PI / 2);
+    geometry.translate(0, drawnDepth / 2, 0);
+    const blob = await exportGeometryAsGLB(geometry, '绘制模型');
+    await addModelFromBlob(blob, {
+      name: `绘制模型 ${new Date().toLocaleDateString('zh-CN')}`,
+      fileName: 'drawn-model.glb',
+      mimeType: 'model/gltf-binary',
+      source: 'drawn',
+    });
+    geometry.dispose();
+  };
+  const handleConvertDrawnToCsg = () => {
+    if (!drawCompleted || drawnPoints.length < 3) return;
+    const shape = new THREE.Shape();
+    shape.moveTo(drawnPoints[0][0], drawnPoints[0][1]);
+    drawnPoints.slice(1).forEach(([x, y]) => shape.lineTo(x, y));
+    shape.closePath();
+    const geometry = new THREE.ExtrudeGeometry(shape, { depth: drawnDepth, bevelEnabled: false });
+    geometry.rotateX(-Math.PI / 2);
+    geometry.translate(0, drawnDepth / 2, 0);
+    const project = buildProjectFromGeometry(geometry, `绘制转 CSG ${new Date().toLocaleDateString('zh-CN')}`);
+    useWorkshopStore.getState().importProject(JSON.stringify({ schema: 1, ...project }));
+    setCurrentGeometry(GeometryType.CSG_WORKSHOP);
+    geometry.dispose();
+  };
   const handleSaveApiKey = () => { if (apiKeyInput.trim()) { setApiKey(apiKeyInput.trim()); setHasApiKey(true); setShowApiKeyModal(false); setApiKeyInput(""); } };
   const handleClearApiKey = () => { clearApiKey(); setHasApiKey(false); setApiKeyInput(""); };
 
@@ -322,6 +388,16 @@ const App: React.FC = () => {
             <div className="mt-2 space-y-1.5">
               <button onClick={() => { setCurrentGeometry(GeometryType.DRAW); if (!drawCompleted) { setDrawnPoints([]); setDrawnDepth(2); } }} className={`w-full p-2.5 rounded-lg text-[11px] text-left transition-all border flex items-center gap-1.5 ${currentGeometry === GeometryType.DRAW ? 'bg-gradient-to-r from-cyan-600/90 to-teal-600/90 border-cyan-400/50 text-white shadow-lg shadow-cyan-500/30' : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10 hover:border-cyan-500/30'}`}>✏️ 绘制建模{drawCompleted && <span className="ml-auto text-[9px] bg-emerald-500 px-1.5 py-0.5 rounded-full font-medium">已完成</span>}</button>
               {currentGeometry === GeometryType.DRAW && drawCompleted && <button onClick={handleBackToDraw} className="w-full p-2 rounded-lg text-[10px] bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 flex items-center justify-center gap-1">← 返回编辑</button>}
+              {currentGeometry === GeometryType.DRAW && drawCompleted && (
+                <button onClick={handleSaveDrawnToLibrary} className="w-full p-2 rounded-lg text-[10px] bg-cyan-500/10 border border-cyan-500/30 text-cyan-200 hover:bg-cyan-500/20 flex items-center justify-center gap-1">
+                  保存绘制模型到模型库
+                </button>
+              )}
+              {currentGeometry === GeometryType.DRAW && drawCompleted && (
+                <button onClick={handleConvertDrawnToCsg} className="w-full p-2 rounded-lg text-[10px] bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 hover:bg-emerald-500/20 flex items-center justify-center gap-1">
+                  一键转为 CSG
+                </button>
+              )}
             </div>
             <div className="mt-3 pt-3 border-t border-white/10">
               <ModelLibraryPanel

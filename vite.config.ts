@@ -20,6 +20,18 @@ export default defineConfig(({ mode }) => {
         },
       },
       plugins: [react()],
+      build: {
+        chunkSizeWarningLimit: 1500,
+        rollupOptions: {
+          output: {
+            manualChunks: {
+              react: ['react', 'react-dom'],
+              three: ['three', '@react-three/fiber', '@react-three/drei', 'three-bvh-csg'],
+              markdown: ['react-markdown'],
+            },
+          },
+        },
+      },
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
